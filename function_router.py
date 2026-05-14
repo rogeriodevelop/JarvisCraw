@@ -99,6 +99,34 @@ class FunctionRouter:
             ):
                 yield event
 
+        elif name == "computer_control":
+            # Pass all arguments to the agent
+            async for event in self.agent.run(
+                instruction=f"Execute desktop action with these parameters: {args}. You can use 'launch_app' for reliable application opening and 'manage_background_task' for status monitoring every few seconds.",
+                mode="edit",
+                allowed_tools="computer_control,Bash,Read,Glob,launch_app,manage_background_task",
+            ):
+                yield event
+
+        elif name == "launch_app":
+            app_name = args.get("name", "")
+            async for event in self.agent.run(
+                instruction=f"Abra o aplicativo: {app_name}",
+                mode="edit",
+                allowed_tools="launch_app",
+            ):
+                yield event
+
+        elif name == "manage_background_task":
+            action = args.get("action", "")
+            instr = args.get("instruction", "")
+            async for event in self.agent.run(
+                instruction=f"Gerencie tarefa em background: {action} - {instr}",
+                mode="edit",
+                allowed_tools="manage_background_task",
+            ):
+                yield event
+
         else:
             yield {
                 "type": "function_result",

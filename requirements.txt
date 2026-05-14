@@ -4,3 +4,5 @@ websockets>=12.0
 google-genai>=1.0.0
 python-dotenv>=1.0.0
 openai>=1.0.0
+pyautogui>=0.9.54
+Pillow>=10.4.0

@@ -134,7 +134,7 @@ async def get_config():
         system_prompt = prompt_path.read_text(encoding="utf-8")
     return {
         "system_prompt": system_prompt,
-        "model": "models/gemini-2.5-flash-native-audio-latest",
+        "model": "models/gemini-3.1-flash-live-preview",
         "nvidia_api_key": os.getenv("NVIDIA_API_KEY"),
         "openrouter_api_key": os.getenv("OPENROUTER_API_KEY"),
     }

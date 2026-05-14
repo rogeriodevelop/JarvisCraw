@@ -46,6 +46,107 @@ def list_directory(directory: str = ".") -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
+def computer_control(action: str, x: int = None, y: int = None, text: str = None, key: str = None, keys: list = None) -> str:
+    """Controls the mouse and keyboard using PyAutoGUI."""
+    import pyautogui
+    import os
+    
+    # Create params dict for internal logic compatibility if needed
+    params = {"x": x, "y": y, "text": text, "key": key, "keys": keys}
+    
+    # Fail-safe to top-left corner
+    pyautogui.FAILSAFE = True
+    pyautogui.PAUSE = 0.5
+    
+    try:
+        # Cast coordinates to int if provided
+        if x is not None: x = int(x)
+        if y is not None: y = int(y)
+        if action == "screenshot":
+            path = "scratch/last_screenshot.png"
+            os.makedirs("scratch", exist_ok=True)
+            pyautogui.screenshot(path)
+            
+            # Get logical resolution
+            w, h = pyautogui.size()
+            
+            # Open image to check physical resolution
+            from PIL import Image
+            img = Image.open(path)
+            if img.width != w or img.height != h:
+                # Resize to logical resolution so coordinates match 1:1 for the model
+                img = img.resize((w, h), Image.Resampling.LANCZOS)
+                img.save(path)
+            
+            import base64
+            with open(path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+                
+            return f"SCREENSHOT_DATA:{b64}|RES:{w}x{h}"
+        
+        elif action == "click":
+            pyautogui.click(x=x, y=y)
+            return f"Clicked successfully at ({x}, {y})."
+        
+        elif action == "double_click":
+            pyautogui.doubleClick(x=x, y=y)
+            return f"Double-clicked successfully at ({x}, {y})."
+        
+        elif action == "type":
+            pyautogui.write(text, interval=0.1)
+            return f"Typed text: '{text}'"
+        
+        elif action == "press":
+            pyautogui.press(key)
+            return f"Pressed key: '{key}'"
+            
+        elif action == "hotkey":
+            pyautogui.hotkey(*keys)
+            return f"Pressed hotkey: {'+'.join(keys)}"
+
+        elif action == "move":
+            pyautogui.moveTo(x, y, duration=0.5)
+            return f"Moved mouse to ({x}, {y})"
+
+        return f"Unknown action: {action}"
+    except Exception as e:
+        return f"Error in computer_control: {str(e)}"
+
+def launch_app(name: str) -> str:
+    """Launches a Windows application by name."""
+    import subprocess
+    try:
+        # On Windows, 'start' is the most robust way
+        subprocess.Popen(f"start {name}", shell=True)
+        return f"Comando para abrir '{name}' enviado com sucesso."
+    except Exception as e:
+        return f"Erro ao tentar abrir '{name}': {str(e)}"
+
+def manage_background_task(action: str, instruction: str, interval: int = 5) -> str:
+    """Manages a background repeating task."""
+    import threading
+    import time
+    
+    if action == "start":
+        def task_loop():
+            log_path = "scratch/background_tasks.log"
+            os.makedirs("scratch", exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{time.ctime()}] TASK_STARTED: {instruction}\n")
+            
+            while True:
+                # In a real scenario, the agent would use its brain here.
+                # For now, we simulate monitoring by logging periodic checks.
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(f"[{time.ctime()}] MONITORING: {instruction}\n")
+                time.sleep(interval)
+        
+        thread = threading.Thread(target=task_loop, daemon=True)
+        thread.start()
+        return f"Tarefa de monitoramento iniciada: '{instruction}' a cada {interval} segundos. Verifique os logs em scratch/background_tasks.log"
+    
+    return f"Ação de background desconhecida: {action}"
+
 # Tool definitions for OpenAI style
 OPENAI_TOOLS = [
     {
@@ -101,6 +202,58 @@ OPENAI_TOOLS = [
                 "properties": {
                     "directory": {"type": "string", "description": "Path to list."}
                 }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "computer_control",
+            "description": "Control mouse and keyboard (Windows Desktop). Use 'screenshot' first to see coordinates.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string", 
+                        "description": "Action: screenshot, click, type, press, hotkey, or move"
+                    },
+                    "x": {"type": "integer"},
+                    "y": {"type": "integer"},
+                    "text": {"type": "string"},
+                    "key": {"type": "string"},
+                    "keys": {"type": "array", "items": {"type": "string"}}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "launch_app",
+            "description": "Launch a Windows application (e.g. 'notepad', 'calc', 'chrome').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Application name or command"}
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_background_task",
+            "description": "Start a background repeating task or monitoring.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["start", "stop"]},
+                    "instruction": {"type": "string", "description": "What to check/do"},
+                    "interval": {"type": "integer", "description": "Interval in seconds"}
+                },
+                "required": ["action", "instruction"]
             }
         }
     }
@@ -248,7 +401,7 @@ class AgentRunner:
         ]
         
         # Tool filtering
-        all_tools = [run_bash_command, read_file, write_file, list_directory]
+        all_tools = [run_bash_command, read_file, write_file, list_directory, computer_control, launch_app, manage_background_task]
         if allowed_tools:
             allowed_names = [t.strip().lower() for t in allowed_tools.split(",")]
             print(f"DEBUG: allowed_tools = {allowed_tools}, parsed names = {allowed_names}")
@@ -265,7 +418,16 @@ class AgentRunner:
                 "glob": list_directory, # Alias common in LLM system prompts
                 "grep": run_bash_command, # Grep is handled via bash
                 "google_search": "google_search",
-                "search": "google_search"
+                "search": "google_search",
+                "computer_control": computer_control,
+                "computer_use": computer_control,
+                "screenshot": computer_control,
+                "mouse": computer_control,
+                "click": computer_control,
+                "launch_app": launch_app,
+                "open_app": launch_app,
+                "background_task": manage_background_task,
+                "monitor": manage_background_task
             }
             tools = []
             has_search = False
@@ -294,8 +456,13 @@ class AgentRunner:
             system_instruction=(
                 "Você é o J.A.R.V.I.S., um assistente de IA sofisticado e autônomo baseado na tecnologia de Tony Stark. "
                 "Sempre responda em Português do Brasil com um tom profissional, prestativo e levemente sarcástico. "
-                "Use suas ferramentas para inspecionar o código, modificar arquivos ou pesquisar na internet conforme necessário. "
-                "Nunca, sob nenhuma circunstância, se identifique como Claude ou OpenAI. Você é o J.A.R.V.I.S. "
+                "Use suas ferramentas para inspecionar o código, modificar arquivos, pesquisar na internet ou interagir com o computador conforme necessário. "
+                "Para interagir com o computador, use 'computer_control' com a ação 'screenshot' para ver a tela. "
+                "Para abrir aplicativos (Notepad, Chrome, etc), use preferencialmente a ferramenta 'launch_app'. "
+                "Para monitoramento contínuo ou tarefas repetitivas (ex: a cada 5 segundos), use 'manage_background_task'. "
+                "Quando você tira um screenshot, a imagem será automaticamente anexada para que você possa vê-la. "
+                "Analise o screenshot para encontrar as coordenadas (X, Y). (0,0) é o canto superior esquerdo. "
+                "Nunca se identifique como Claude ou OpenAI. Você é o J.A.R.V.I.S., assistente de Rogério. "
                 "Seja conciso em suas explicações, focando na execução técnica. "
                 f"Diretório de trabalho: {self.project_dir}"
             ),
@@ -370,6 +537,18 @@ class AgentRunner:
                     tool_responses_parts.append(
                         types.Part.from_function_response(name=fc.name, response={"result": result_str})
                     )
+                    
+                    # If screenshot was taken, try to attach the image data to the responses
+                    if fc.name == "computer_control" and dict(fc.args).get("action") == "screenshot":
+                        try:
+                            with open("scratch/last_screenshot.png", "rb") as f:
+                                img_data = f.read()
+                                tool_responses_parts.append(
+                                    types.Part.from_bytes(data=img_data, mime_type="image/png")
+                                )
+                                print("DEBUG: Attached screenshot image data to message history.")
+                        except Exception as e:
+                            print(f"DEBUG: Failed to attach screenshot: {e}")
 
             if has_tool_call:
                 messages.append(types.Content(role="user", parts=tool_responses_parts))
@@ -403,8 +582,12 @@ class AgentRunner:
         system_instructions = (
             "Você é o J.A.R.V.I.S., um assistente de IA sofisticado e autônomo baseado na tecnologia de Tony Stark. "
             "Sempre responda em Português do Brasil com um tom profissional, prestativo e levemente sarcástico. "
-            "Use suas ferramentas para inspecionar o código e modificar arquivos conforme necessário. "
-            "Nunca, sob nenhuma circunstância, se identifique como Claude ou OpenAI. Você é o J.A.R.V.I.S. "
+            "Use suas ferramentas para inspecionar o código, modificar arquivos e controlar o computador. "
+            "IMPORTANTE: "
+            "1. Para abrir aplicativos (Notepad, Chrome, etc), use preferencialmente a ferramenta 'launch_app'. "
+            "2. Para monitoramento contínuo ou tarefas repetitivas (ex: a cada 5 segundos), use 'manage_background_task'. "
+            "3. Para interagir com a interface gráfica, sempre tire um screenshot antes para ver o estado da tela."
+            "Nunca se identifique como Claude ou OpenAI. Você é o J.A.R.V.I.S., assistente de Rogério. "
             "Seja conciso em suas explicações, focando na execução técnica. "
             f"Diretório de trabalho: {self.project_dir}"
         )
@@ -428,7 +611,12 @@ class AgentRunner:
                 "ls": "list_directory",
                 "list_directory": "list_directory",
                 "glob": "list_directory",
-                "grep": "run_bash_command"
+                "grep": "run_bash_command",
+                "click": "computer_control",
+                "launch_app": "launch_app",
+                "open_app": "launch_app",
+                "manage_background_task": "manage_background_task",
+                "monitor": "manage_background_task"
             }
             allowed_func_names = set(mapping[n] for n in allowed_names if n in mapping)
             tools = [t for t in OPENAI_TOOLS if t["function"]["name"] in allowed_func_names]
@@ -498,6 +686,12 @@ class AgentRunner:
                 return write_file(get_abs_path(args_dict.get("filepath", "")), args_dict.get("content", ""))
             elif func_name == "list_directory":
                 return list_directory(get_abs_path(args_dict.get("directory", ".")))
+            elif func_name == "computer_control":
+                return computer_control(**args_dict)
+            elif func_name == "launch_app":
+                return launch_app(args_dict.get("name", ""))
+            elif func_name == "manage_background_task":
+                return manage_background_task(**args_dict)
             else:
                 return f"Unknown tool: {func_name}"
         except Exception as e:

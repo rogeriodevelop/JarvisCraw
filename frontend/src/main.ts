@@ -143,7 +143,21 @@ async function initVoiceUI(): Promise<void> {
         }
 
         if (gemini) {
-          gemini.sendFunctionResponse(msg.id, msg.name, enrichedResult);
+          if (msg.name === "computer_control" && msg.result.startsWith("SCREENSHOT_DATA:")) {
+            const parts = msg.result.split("|RES:");
+            const b64 = parts[0].replace("SCREENSHOT_DATA:", "");
+            const res = parts[1] || "unknown";
+            
+            log("AGENT", `Detected screenshot data (RES: ${res}). Sending to Gemini as image part.`);
+            
+            // Send the function response text first (without the huge b64)
+            gemini.sendFunctionResponse(msg.id, msg.name, `Screenshot taken successfully. Resolution: ${res}. I am now seeing the screen.`);
+            
+            // Then send the image in a separate turn to update Gemini's vision
+            gemini.sendText("", [{ mimeType: "image/png", data: b64 }]);
+          } else {
+            gemini.sendFunctionResponse(msg.id, msg.name, enrichedResult);
+          }
         }
         ui.addGeminiToolResult(msg.name, msg.result, msg.is_error || false);
         ui.addActivityDone(msg.is_error || false);

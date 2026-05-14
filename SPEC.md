@@ -30,7 +30,13 @@ O sistema expõe ferramentas locais para que o agente possa interagir com o sist
 - `write_file(path: str, content: str)`: Escreve ou sobrescreve um arquivo.
 - `list_files(path: str)`: Lista arquivos em um diretório.
 
-### 3.2 Tradução de Formatos
+### 3.2 Automação de Desktop (Novo)
+O sistema permite o controle direto da interface gráfica e monitoramento persistente:
+- `computer_control(action: str, ...)`: Controle de mouse (click, move) e teclado (type, press, hotkey) via PyAutoGUI. Inclui `screenshot` com redimensionamento automático para alinhar coordenadas físicas e lógicas.
+- `launch_app(name: str)`: Abertura robusta de aplicativos Windows via subprocesso.
+- `manage_background_task(action: str, instruction: str)`: Execução de loops de monitoramento em threads separadas para não bloquear a interface de voz.
+
+### 3.3 Tradução de Formatos
 O `AgentRunner` deve traduzir as definições de ferramentas:
 - **Formato Google**: Dicionários seguindo o esquema `google-genai`.
 - **Formato OpenAI (NVIDIA/OpenRouter)**: Esquema JSON Schema padrão para `tools` e `tool_choice`.

@@ -177,26 +177,62 @@ export const functionDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "generate_image",
-    description:
-      "Generate an image based on a text prompt. Use this when the user asks to 'generate an image', 'create a picture', 'draw', or wants to see a visual representation of something. This uses NVIDIA Picasso.",
+    description: "Generate an image using NVIDIA Picasso (Picasso model).",
     parametersJsonSchema: {
       type: "object",
       properties: {
-        prompt: {
-          type: "string",
-          description: "A detailed description of the image to generate",
-        },
-        negativePrompt: {
-          type: "string",
-          description: "What to EXCLUDE from the image",
-        },
+        prompt: { type: "string", description: "Image description" },
+        negativePrompt: { type: "string", description: "What to exclude" },
         aspectRatio: {
           type: "string",
-          description: "Aspect ratio of the image",
-          enum: ["1:1", "16:9", "9:16", "4:3", "3:4"],
+          enum: ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9"],
         },
       },
       required: ["prompt"],
+    },
+  },
+  {
+    name: "computer_control",
+    description:
+      "Control mouse and keyboard. Actions: 'screenshot', 'click', 'double_click', 'type', 'press', 'hotkey', 'move'. Parameters: {x, y, text, key, keys}. ALWAYS take a screenshot first.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description: "Action: screenshot, click, double_click, type, press, hotkey, or move",
+        },
+        x: { type: "number", description: "X coordinate" },
+        y: { type: "number", description: "Y coordinate" },
+        text: { type: "string", description: "Text to type" },
+        key: { type: "string", description: "Key to press" },
+        keys: { type: "array", items: { type: "string" }, description: "Keys for hotkey" },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "launch_app",
+    description: "Launch a Windows application (e.g. 'notepad', 'calc', 'chrome').",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Application name or command" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "manage_background_task",
+    description: "Start or stop a background repeating task or monitoring.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["start", "stop"] },
+        instruction: { type: "string", description: "What to check or report" },
+        interval: { type: "number", description: "Interval in seconds" },
+      },
+      required: ["action", "instruction"],
     },
   },
 ];
