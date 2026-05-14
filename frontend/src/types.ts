@@ -320,10 +320,17 @@ export interface AgentThinkingEvent {
   text: string;
 }
 
+/** Backend → Browser: Request to clear the Live Canvas */
+export interface AgentClearCanvasEvent {
+  type: "agent_event";
+  subtype: "clear_canvas";
+}
+
 export type BackendMessage =
   | AgentToolUseEvent
   | AgentTextEvent
   | AgentThinkingEvent
+  | AgentClearCanvasEvent
   | FunctionResultMessage
   | StatusMessage;
 

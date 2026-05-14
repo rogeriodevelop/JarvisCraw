@@ -67,6 +67,9 @@ export class UI {
   // Filter state
   private filters: Record<string, boolean> = {};
 
+  // Voice Block tracking
+  private currentVoiceBlock: HTMLElement | null = null;
+
   constructor() {
     this.transcriptEl = document.getElementById("transcript")!;
     this.timeline = document.getElementById("timeline")!;
@@ -115,12 +118,6 @@ export class UI {
   }
 
   private canvasContent: HTMLElement;
-
-  updateLiveCanvas(html: string): void {
-    if (this.canvasContent) {
-      this.canvasContent.innerHTML = html;
-    }
-  }
 
   private initFilters(): void {
     const chips = document.querySelectorAll(".filter-chip");
@@ -321,16 +318,12 @@ export class UI {
   addTranscript(role: "user" | "gemini" | "narrator", text: string): void {
     if (role === this.lastTranscriptRole && this.lastTranscriptEl) {
       this.lastTranscriptText += text;
-      const textSpan = this.lastTranscriptEl.querySelector(".transcript-text");
-      if (textSpan) {
-        textSpan.textContent = this.lastTranscriptText;
-      }
     } else {
       const entry = document.createElement("div");
       entry.className = `transcript-entry transcript-${role}`;
       const roleLabels: Record<string, string> = { user: "You", gemini: "Jarvis", narrator: "Jarvis (Thinking)" };
       const roleLabel = roleLabels[role] || role;
-      entry.innerHTML = `<span class="role">${roleLabel}:</span> <span class="transcript-text">${escapeHtml(text)}</span>`;
+      entry.innerHTML = `<span class="role">${roleLabel}:</span> <span class="transcript-text"></span>`;
 
       this.transcriptEl.appendChild(entry);
       this.lastTranscriptRole = role;
@@ -338,13 +331,40 @@ export class UI {
       this.lastTranscriptText = text;
     }
 
+    const textSpan = this.lastTranscriptEl!.querySelector(".transcript-text") as HTMLElement;
+    if (textSpan) {
+      if (role === "gemini" || role === "narrator") {
+        const result = this.extractCodeAndClean(this.lastTranscriptText);
+        textSpan.innerHTML = result.cleanHtml; // Use innerHTML for ref tags
+        if (result.hasCode) {
+          // If we don't have a block for this speech yet, create it
+          if (!this.currentVoiceBlock) {
+            this.currentVoiceBlock = document.createElement("div");
+            this.currentVoiceBlock.className = "canvas-voice-block";
+            this.canvasContent.innerHTML += `<div class="canvas-block-sep"></div>`;
+            this.canvasContent.appendChild(this.currentVoiceBlock);
+          }
+          
+          // Update the content of the current block
+          this.currentVoiceBlock.innerHTML = result.canvasHtml;
+          this.attachSaveButtonListeners();
+          this.canvasContent.scrollTop = this.canvasContent.scrollHeight;
+        }
+
+      } else {
+        textSpan.textContent = this.lastTranscriptText;
+      }
+    }
+
     this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
   }
 
   endTranscript(): void {
+    // If it was the agent, we might want to keep the canvas state
     this.lastTranscriptRole = null;
     this.lastTranscriptEl = null;
     this.lastTranscriptText = "";
+    this.currentVoiceBlock = null; // Reset voice block for next speech
   }
 
   replaceLastUserTranscript(text: string): void {
@@ -494,13 +514,23 @@ export class UI {
   }
 
   addAgentText(text: string): void {
-    this.appendTimeline("agent-text", "Agent", text, true);
+    const result = this.extractCodeAndClean(text);
+    this.appendTimeline("agent-text", "Agent", result.cleanHtml, true);
     
-    // Extract all code blocks
-    const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+    if (result.hasCode || result.isAnalysis) {
+      this.updateLiveCanvas(result.canvasHtml, true); // Append content
+    }
+  }
+
+  /**
+   * Core logic to separate UI text from Canvas content
+   */
+  private extractCodeAndClean(text: string): { cleanHtml: string, canvasHtml: string, hasCode: boolean, isAnalysis: boolean } {
+    const codeBlockRegex = /```(\w*)[\s\n]*([\s\S]*?)```/g;
     let match;
     let hasCode = false;
     let canvasHtml = "";
+    let cleanText = text;
 
     while ((match = codeBlockRegex.exec(text)) !== null) {
       hasCode = true;
@@ -509,21 +539,89 @@ export class UI {
       
       canvasHtml += `<div class="canvas-header-lang">${language.toUpperCase()}</div>`;
       
+      // If it's HTML or SVG, wrap it in a render box for live viewing
       if (language.toLowerCase() === 'html' || language.toLowerCase() === 'svg') {
-          canvasHtml += `<div class="canvas-render-box">${code}</div>`;
-      } else {
-          canvasHtml += `<pre><code>${escapeHtml(code)}</code></pre>`;
+          const isSvg = language.toLowerCase() === 'svg';
+          // Ensure SVG has a container if it's just paths
+          const displayCode = isSvg && !code.trim().startsWith('<svg') 
+            ? `<svg viewBox="0 0 100 100" style="width:100%; height:auto;">${code}</svg>` 
+            : code;
+          canvasHtml += `<div class="canvas-render-box">${displayCode}</div>`;
+      }
+
+      canvasHtml += `
+        <div class="canvas-code-wrapper">
+          <pre><code>${escapeHtml(code)}</code></pre>
+          <button class="canvas-btn canvas-save-btn" data-code="${escapeAttr(code)}">💾 Save to File</button>
+        </div>`;
+
+      cleanText = cleanText.replace(match[0], `<span class="canvas-ref-tag">[View ${language.toUpperCase()} in Canvas]</span>`);
+    }
+
+    let isAnalysis = false;
+    if (!hasCode && text.length > 40) {
+      isAnalysis = true;
+      const rendered = marked.parse(text) as string;
+      canvasHtml = `<div class="canvas-md">${rendered}</div>`;
+      if (text.length > 150) {
+        cleanText = text.slice(0, 100) + "... " + `<span class="canvas-ref-tag">[Full Analysis in Canvas]</span>`;
       }
     }
 
-    if (hasCode) {
-      this.updateLiveCanvas(canvasHtml);
-    } else if (text.length > 50) {
-      // For longer texts without code, show as markdown summary
-      const rendered = marked.parse(text) as string;
-      this.updateLiveCanvas(`<div class="canvas-md">${rendered}</div>`);
+    return {
+      cleanHtml: hasCode || (isAnalysis && text.length > 150) ? cleanText : escapeHtml(text),
+      canvasHtml,
+      hasCode,
+      isAnalysis
+    };
+  }
+
+  // ── Canvas Management ──────────────────────────────────────
+
+  updateLiveCanvas(html: string, append: boolean = true): void {
+    if (!this.canvasContent) return;
+    if (append) {
+      this.canvasContent.innerHTML += `<div class="canvas-block-sep"></div>` + html;
+    } else {
+      this.canvasContent.innerHTML = html;
+    }
+
+    // Attach listeners to any new save buttons
+    this.attachSaveButtonListeners();
+    this.canvasContent.scrollTop = this.canvasContent.scrollHeight;
+  }
+
+  private attachSaveButtonListeners(): void {
+    const buttons = this.canvasContent.querySelectorAll(".canvas-save-btn:not([data-attached])");
+    buttons.forEach((btn) => {
+      btn.setAttribute("data-attached", "true");
+      btn.addEventListener("click", () => {
+        const code = (btn as HTMLElement).dataset.code || "";
+        const fn = prompt("Filename to save in current project directory:", "generated_file.py");
+        if (fn && (window as any).backend) {
+          (window as any).backend.sendFunctionCall(
+            "canvas_save_" + Date.now(),
+            "save_canvas_file",
+            { path: fn, content: code }
+          );
+          alert(`Request to save ${fn} sent to Jarvis.`);
+        }
+      });
+    });
+  }
+
+  clearCanvas(): void {
+    if (this.canvasContent) {
+      this.canvasContent.innerHTML = `
+        <div class="canvas-empty-state">
+          <div class="canvas-empty-icon">JARVIS</div>
+          <p>Workspace cleared. Ready for next task.</p>
+        </div>
+      `;
     }
   }
+
+  // ── Timeline Management ─────────────────────────────────────
 
   // Clear all transcript and timeline content
   clearAll(): void {
@@ -532,6 +630,7 @@ export class UI {
     this.lastTranscriptRole = null;
     this.lastTranscriptEl = null;
     this.lastTranscriptText = "";
+    this.clearCanvas();
   }
 
   // Status events

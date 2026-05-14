@@ -17,7 +17,7 @@ import { BackendConnection } from "./backend-connection";
 import { UI } from "./ui";
 import { WaveRenderer } from "./wave-renderer";
 import { NvidiaApiService } from "./services/nvidia-api";
-import type { BackendMessage, AgentToolUseEvent } from "./types";
+import type { BackendMessage, AgentToolUseEvent, AgentTextEvent, AgentThinkingEvent, AgentClearCanvasEvent } from "./types";
 
 const ui = new UI();
 
@@ -101,26 +101,28 @@ async function initVoiceUI(): Promise<void> {
 
   // Backend WebSocket — always active
   backend = new BackendConnection((msg: BackendMessage) => {
+    (window as any).backend = backend;
     switch (msg.type) {
-      case "agent_event":
-        if (msg.subtype === "tool_use") {
-          const e = msg as AgentToolUseEvent;
+      case "agent_event": {
+        const e = msg as AgentToolUseEvent | AgentTextEvent | AgentThinkingEvent | AgentClearCanvasEvent;
+        if (e.subtype === "tool_use") {
           const detail = (e.input.file_path as string) || (e.input.command as string) || (e.input.pattern as string) || "";
           log("AGENT", `tool=${e.tool} ${detail ? "target=" + detail : ""}`);
           ui.addActivityEvent(e);
           agentActivityLog.push(`[${e.tool}] ${detail}`);
-          // Feed narration
           narration?.sendEvent(`Agent used ${e.tool}${detail ? ` on ${detail}` : ""}`);
-        } else if (msg.subtype === "thinking") {
-          log("AGENT", `thinking: ${msg.text.slice(0, 100)}`);
-          ui.addAgentThinking(msg.text);
-          // Feed narration with thinking summary
-          narration?.sendEvent(`Agent is thinking: ${msg.text.slice(0, 200)}`);
-        } else if (msg.subtype === "text") {
-          log("AGENT", `text: ${msg.text.slice(0, 100)}`);
-          ui.addAgentText(msg.text);
+        } else if (e.subtype === "thinking") {
+          log("AGENT", `thinking: ${e.text.slice(0, 100)}`);
+          ui.addAgentThinking(e.text);
+          narration?.sendEvent(`Agent is thinking: ${e.text.slice(0, 200)}`);
+        } else if (e.subtype === "text") {
+          log("AGENT", `text: ${e.text.slice(0, 100)}`);
+          ui.addAgentText(e.text);
+        } else if (e.subtype === "clear_canvas") {
+          ui.clearCanvas();
         }
         break;
+      }
 
       case "function_result": {
         const preview = msg.result.slice(0, 150);

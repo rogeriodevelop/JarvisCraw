@@ -155,6 +155,28 @@ class FunctionRouter:
             ):
                 yield event
 
+        elif name == "save_canvas_file":
+            path = args.get("path", "script.py")
+            content = args.get("content", "")
+            # We use a direct instruction to the agent to ensure it's logged
+            async for event in self.agent.run(
+                instruction=f"Gravar o seguinte conteúdo no arquivo '{path}':\n\n{content}",
+                mode="edit",
+                allowed_tools="write"
+            ):
+                yield event
+
+        elif name == "clear_canvas":
+            yield {
+                "type": "agent_event",
+                "subtype": "clear_canvas"
+            }
+            yield {
+                "type": "function_result",
+                "result": "Canvas limpo com sucesso.",
+                "is_error": False
+            }
+
         else:
             yield {
                 "type": "function_result",

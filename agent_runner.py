@@ -179,9 +179,9 @@ OPENAI_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "filepath": {"type": "string", "description": "Path to the file."}
+                    "path": {"type": "string", "description": "Path to the file."}
                 },
-                "required": ["filepath"]
+                "required": ["path"]
             }
         }
     },
@@ -193,10 +193,10 @@ OPENAI_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "filepath": {"type": "string", "description": "Path to the file."},
+                    "path": {"type": "string", "description": "Path to the file."},
                     "content": {"type": "string", "description": "Content to write."}
                 },
-                "required": ["filepath", "content"]
+                "required": ["path", "content"]
             }
         }
     },
@@ -705,9 +705,9 @@ class AgentRunner:
             if func_name == "run_bash_command":
                 return run_bash_command(args_dict.get("command", ""))
             elif func_name == "read_file":
-                return read_file(get_abs_path(args_dict.get("filepath", "")))
+                return read_file(get_abs_path(args_dict.get("path", "")))
             elif func_name == "write_file":
-                return write_file(get_abs_path(args_dict.get("filepath", "")), args_dict.get("content", ""))
+                return write_file(get_abs_path(args_dict.get("path", "")), args_dict.get("content", ""))
             elif func_name == "list_directory":
                 return list_directory(get_abs_path(args_dict.get("directory", ".")))
             elif func_name == "computer_control":
