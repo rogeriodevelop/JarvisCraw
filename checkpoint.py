@@ -19,18 +19,18 @@ class SessionManager:
                 return json.loads(self.state_file.read_text())
             except (json.JSONDecodeError, OSError):
                 pass
-        return {"claude_session_id": None, "gemini_handle": None}
+        return {"agent_session_id": None, "gemini_handle": None, "agent_model": "google/gemini-2.0-flash", "agent_effort": "high"}
 
     def save(self):
         self.state_file.write_text(json.dumps(self.state, indent=2))
 
     @property
-    def claude_session_id(self) -> str | None:
-        return self.state.get("claude_session_id")
+    def agent_session_id(self) -> str | None:
+        return self.state.get("agent_session_id")
 
-    @claude_session_id.setter
-    def claude_session_id(self, value: str | None):
-        self.state["claude_session_id"] = value
+    @agent_session_id.setter
+    def agent_session_id(self, value: str | None):
+        self.state["agent_session_id"] = value
         self.save()
 
     @property
@@ -41,6 +41,26 @@ class SessionManager:
     def gemini_handle(self, value: str | None):
         self.state["gemini_handle"] = value
         self.save()
+
+    @property
+    def agent_model(self) -> str | None:
+        return self.state.get("agent_model")
+
+    @agent_model.setter
+    def agent_model(self, value: str | None):
+        if value:
+            self.state["agent_model"] = value
+            self.save()
+
+    @property
+    def agent_effort(self) -> str | None:
+        return self.state.get("agent_effort")
+
+    @agent_effort.setter
+    def agent_effort(self, value: str | None):
+        if value:
+            self.state["agent_effort"] = value
+            self.save()
 
 
 class GitCheckpoint:

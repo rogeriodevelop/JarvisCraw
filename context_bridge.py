@@ -1,4 +1,4 @@
-"""Store recent Claude results for Gemini reconnection context."""
+"""Store recent Agent results for Gemini reconnection context."""
 
 from collections import deque
 from dataclasses import dataclass, field
@@ -28,7 +28,7 @@ class ContextBridge:
         if not self.entries:
             return "No recent activity."
 
-        lines = ["Recent Claude Code activity:"]
+        lines = ["Recent Agent activity:"]
         for entry in self.entries:
             args_str = ", ".join(f"{k}={v}" for k, v in entry.args.items())
             result_preview = entry.result[:200]

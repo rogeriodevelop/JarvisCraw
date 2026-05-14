@@ -68,7 +68,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "get_status",
     description:
-      "Get current session status: what files changed, Claude state.",
+      "Get current session status: what files changed, Agent state.",
     parametersJsonSchema: {
       type: "object",
       properties: {},
@@ -92,7 +92,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "plan_task",
     description:
-      "Create a detailed plan for a task WITHOUT making any changes. Use when the user says 'plan', 'think about', 'how would you', 'what's the approach for', or wants to analyze before acting. Claude reads the code and produces a step-by-step plan.",
+      "Create a detailed plan for a task WITHOUT making any changes. Use when the user says 'plan', 'think about', 'how would you', 'what's the approach for', or wants to analyze before acting. The Agent reads the code and produces a step-by-step plan.",
     parametersJsonSchema: {
       type: "object",
       properties: {
@@ -107,7 +107,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "debug_issue",
     description:
-      "Diagnose a bug or error WITHOUT applying fixes. Use when the user says 'debug', 'why is this broken', 'find the bug', 'what's causing this error'. Claude investigates the codebase, runs tests if needed, and reports the root cause with a recommended fix.",
+      "Diagnose a bug or error WITHOUT applying fixes. Use when the user says 'debug', 'why is this broken', 'find the bug', 'what's causing this error'. The Agent investigates the codebase, runs tests if needed, and reports the root cause with a recommended fix.",
     parametersJsonSchema: {
       type: "object",
       properties: {
@@ -122,7 +122,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "review_changes",
     description:
-      "Review code changes for bugs, security issues, and quality. Use when the user says 'review', 'check my code', 'does this look right', 'any issues'. Claude reviews recent git changes and gives actionable feedback.",
+      "Review code changes for bugs, security issues, and quality. Use when the user says 'review', 'check my code', 'does this look right', 'any issues'. The Agent reviews recent git changes and gives actionable feedback.",
     parametersJsonSchema: {
       type: "object",
       properties: {
@@ -148,16 +148,15 @@ export const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
-    name: "set_claude_model",
+    name: "set_agent_model",
     description:
-      "Change the Claude AI model and/or reasoning effort used for code tasks. Call this when the user asks to switch models, use a different model, change reasoning effort, or wants faster/smarter responses. If the user asks what models or efforts are available, call this with no parameters to get the current config and available options.",
+      "Change the AI model and/or reasoning effort used for code tasks. Call this when the user asks to switch models, use a different model, change reasoning effort, or wants faster/smarter responses. If the user asks what models or efforts are available, call this with no parameters to get the current config and available options.",
     parametersJsonSchema: {
       type: "object",
       properties: {
         model: {
           type: "string",
-          description: "The model to use: 'opus' (smartest, slowest), 'sonnet' (balanced), or 'haiku' (fastest, cheapest)",
-          enum: ["opus", "sonnet", "haiku"],
+          description: "The model to use: e.g., 'gemini-2.0-flash', 'llama-3.3-70b', 'deepseek-v4', 'kimi-v1.5'",
         },
         effort: {
           type: "string",
@@ -170,10 +169,34 @@ export const functionDeclarations: FunctionDeclaration[] = [
   {
     name: "cancel_task",
     description:
-      "Cancel/stop the currently running Claude operation. Use when the user says 'stop', 'cancel', 'nevermind', 'abort', or wants to halt an ongoing code task.",
+      "Cancel/stop the currently running Agent operation. Use when the user says 'stop', 'cancel', 'nevermind', 'abort', or wants to halt an ongoing code task.",
     parametersJsonSchema: {
       type: "object",
       properties: {},
+    },
+  },
+  {
+    name: "generate_image",
+    description:
+      "Generate an image based on a text prompt. Use this when the user asks to 'generate an image', 'create a picture', 'draw', or wants to see a visual representation of something. This uses NVIDIA Picasso.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "A detailed description of the image to generate",
+        },
+        negativePrompt: {
+          type: "string",
+          description: "What to EXCLUDE from the image",
+        },
+        aspectRatio: {
+          type: "string",
+          description: "Aspect ratio of the image",
+          enum: ["1:1", "16:9", "9:16", "4:3", "3:4"],
+        },
+      },
+      required: ["prompt"],
     },
   },
 ];
@@ -188,18 +211,18 @@ export interface FunctionCallMessage {
   args: Record<string, unknown>;
 }
 
-/** Backend → Browser: Claude tool use event */
-export interface ClaudeToolUseEvent {
-  type: "claude_event";
+/** Backend → Browser: Agent tool use event */
+export interface AgentToolUseEvent {
+  type: "agent_event";
   subtype: "tool_use";
   tool: string;
   input: Record<string, unknown>;
   timestamp?: string;
 }
 
-/** Backend → Browser: Claude text output */
-export interface ClaudeTextEvent {
-  type: "claude_event";
+/** Backend → Browser: Agent text output */
+export interface AgentTextEvent {
+  type: "agent_event";
   subtype: "text";
   text: string;
   timestamp?: string;
@@ -217,21 +240,21 @@ export interface FunctionResultMessage {
 /** Backend → Browser: status update */
 export interface StatusMessage {
   type: "status";
-  claude_running: boolean;
+  agent_running: boolean;
   session_id: string | null;
 }
 
-/** Backend → Browser: Claude thinking output */
-export interface ClaudeThinkingEvent {
-  type: "claude_event";
+/** Backend → Browser: Agent thinking output */
+export interface AgentThinkingEvent {
+  type: "agent_event";
   subtype: "thinking";
   text: string;
 }
 
 export type BackendMessage =
-  | ClaudeToolUseEvent
-  | ClaudeTextEvent
-  | ClaudeThinkingEvent
+  | AgentToolUseEvent
+  | AgentTextEvent
+  | AgentThinkingEvent
   | FunctionResultMessage
   | StatusMessage;
 
@@ -248,5 +271,5 @@ export interface TokenResponse {
 
 export interface SessionState {
   gemini_handle: string | null;
-  claude_session_id: string | null;
+  agent_session_id: string | null;
 }

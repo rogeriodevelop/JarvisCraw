@@ -38,30 +38,44 @@ def transcribe_audio_sync(
     client = genai.Client(api_key=api_key)
     lang_name = _language_name(language_code)
 
-    response = client.models.generate_content(
-        model="gemini-2.0-flash-exp",
-        contents=[
-            {
-                "parts": [
+    # Try different models for STT to avoid quota issues
+    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash"]
+    last_err = None
+    
+    for model_id in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_id,
+                contents=[
                     {
-                        "text": (
-                            f"Transcribe this audio exactly as spoken in {lang_name}. "
-                            "Output ONLY the transcription text, nothing else. "
-                            "No quotes, no labels, no explanations."
-                        ),
-                    },
-                    {
-                        "inline_data": {
-                            "mime_type": "audio/wav",
-                            "data": audio_b64,
-                        },
-                    },
+                        "parts": [
+                            {
+                                "text": (
+                                    f"Transcribe this audio exactly as spoken in {lang_name}. "
+                                    "Output ONLY the transcription text, nothing else. "
+                                    "No quotes, no labels, no explanations."
+                                ),
+                            },
+                            {
+                                "inline_data": {
+                                    "mime_type": "audio/wav",
+                                    "data": audio_b64,
+                                },
+                            },
+                        ],
+                    }
                 ],
-            }
-        ],
-    )
-
-    return (response.text or "").strip()
+            )
+            return (response.text or "").strip()
+        except Exception as e:
+            last_err = e
+            if "429" in str(e) or "quota" in str(e).lower():
+                continue
+            break
+            
+    if last_err:
+        print(f"STT Error: {last_err}")
+    return ""
 
 
 async def transcribe_audio(

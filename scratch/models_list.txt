@@ -1,0 +1,51 @@
+ID: models/gemini-2.5-flash, Name: Gemini 2.5 Flash
+ID: models/gemini-2.5-pro, Name: Gemini 2.5 Pro
+ID: models/gemini-2.0-flash, Name: Gemini 2.0 Flash
+ID: models/gemini-2.0-flash-001, Name: Gemini 2.0 Flash 001
+ID: models/gemini-2.0-flash-lite-001, Name: Gemini 2.0 Flash-Lite 001
+ID: models/gemini-2.0-flash-lite, Name: Gemini 2.0 Flash-Lite
+ID: models/gemini-2.5-flash-preview-tts, Name: Gemini 2.5 Flash Preview TTS
+ID: models/gemini-2.5-pro-preview-tts, Name: Gemini 2.5 Pro Preview TTS
+ID: models/gemma-4-26b-a4b-it, Name: Gemma 4 26B A4B IT
+ID: models/gemma-4-31b-it, Name: Gemma 4 31B IT
+ID: models/gemini-flash-latest, Name: Gemini Flash Latest
+ID: models/gemini-flash-lite-latest, Name: Gemini Flash-Lite Latest
+ID: models/gemini-pro-latest, Name: Gemini Pro Latest
+ID: models/gemini-2.5-flash-lite, Name: Gemini 2.5 Flash-Lite
+ID: models/gemini-2.5-flash-image, Name: Nano Banana
+ID: models/gemini-3-pro-preview, Name: Gemini 3 Pro Preview
+ID: models/gemini-3-flash-preview, Name: Gemini 3 Flash Preview
+ID: models/gemini-3.1-pro-preview, Name: Gemini 3.1 Pro Preview
+ID: models/gemini-3.1-pro-preview-customtools, Name: Gemini 3.1 Pro Preview Custom Tools
+ID: models/gemini-3.1-flash-lite-preview, Name: Gemini 3.1 Flash Lite Preview
+ID: models/gemini-3.1-flash-lite, Name: Gemini 3.1 Flash Lite
+ID: models/gemini-3-pro-image-preview, Name: Nano Banana Pro
+ID: models/nano-banana-pro-preview, Name: Nano Banana Pro
+ID: models/gemini-3.1-flash-image-preview, Name: Nano Banana 2
+ID: models/lyria-3-clip-preview, Name: Lyria 3 Clip Preview
+ID: models/lyria-3-pro-preview, Name: Lyria 3 Pro Preview
+ID: models/gemini-3.1-flash-tts-preview, Name: Gemini 3.1 Flash TTS Preview
+ID: models/gemini-robotics-er-1.5-preview, Name: Gemini Robotics-ER 1.5 Preview
+ID: models/gemini-robotics-er-1.6-preview, Name: Gemini Robotics-ER 1.6 Preview
+ID: models/gemini-2.5-computer-use-preview-10-2025, Name: Gemini 2.5 Computer Use Preview 10-2025
+ID: models/deep-research-max-preview-04-2026, Name: Deep Research Max Preview (Apr-21-2026)
+ID: models/deep-research-preview-04-2026, Name: Deep Research Preview (Apr-21-2026)
+ID: models/deep-research-pro-preview-12-2025, Name: Deep Research Pro Preview (Dec-12-2025)
+ID: models/gemini-embedding-001, Name: Gemini Embedding 001
+ID: models/gemini-embedding-2-preview, Name: Gemini Embedding 2 Preview
+ID: models/gemini-embedding-2, Name: Gemini Embedding 2
+ID: models/aqa, Name: Model that performs Attributed Question Answering.
+ID: models/imagen-4.0-generate-001, Name: Imagen 4
+ID: models/imagen-4.0-ultra-generate-001, Name: Imagen 4 Ultra
+ID: models/imagen-4.0-fast-generate-001, Name: Imagen 4 Fast
+ID: models/veo-2.0-generate-001, Name: Veo 2
+ID: models/veo-3.0-generate-001, Name: Veo 3
+ID: models/veo-3.0-fast-generate-001, Name: Veo 3 fast
+ID: models/veo-3.1-generate-preview, Name: Veo 3.1
+ID: models/veo-3.1-fast-generate-preview, Name: Veo 3.1 fast
+ID: models/veo-3.1-lite-generate-preview, Name: Veo 3.1 lite
+ID: models/gemini-2.5-flash-native-audio-latest, Name: Gemini 2.5 Flash Native Audio Latest
+ID: models/gemini-2.5-flash-native-audio-preview-09-2025, Name: Gemini 2.5 Flash Native Audio Preview 09-2025
+ID: models/gemini-2.5-flash-native-audio-preview-12-2025, Name: Gemini 2.5 Flash Native Audio Preview 12-2025
+ID: models/gemini-3.1-flash-live-preview, Name: Gemini 3.1 Flash Live Preview
+ID: models/lyria-realtime-exp, Name: Lyria Realtime Experimental

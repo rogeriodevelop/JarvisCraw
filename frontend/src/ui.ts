@@ -3,7 +3,7 @@
  */
 
 import { marked } from "marked";
-import type { ClaudeToolUseEvent } from "./types";
+import type { AgentToolUseEvent, AgentTextEvent } from "./types";
 
 // Configure marked for inline rendering
 marked.setOptions({ breaks: true });
@@ -15,11 +15,11 @@ type EventCategory =
   | "gemini-tool-result"
   | "gemini-tool-error"
   | "gemini-summarize"
-  | "claude-tool"
-  | "claude-done"
-  | "claude-error"
-  | "claude-thinking"
-  | "claude-text"
+  | "agent-tool"
+  | "agent-done"
+  | "agent-error"
+  | "agent-thinking"
+  | "agent-text"
   | "file-change"
   | "status";
 
@@ -30,11 +30,11 @@ const FILTER_MAP: Record<EventCategory, string> = {
   "gemini-tool-result": "gemini-tool-result",
   "gemini-tool-error": "gemini-tool-result",
   "gemini-summarize": "gemini-tool-result",
-  "claude-tool": "claude-tool",
-  "claude-done": "claude-tool",
-  "claude-error": "claude-tool",
-  "claude-thinking": "claude-thinking",
-  "claude-text": "claude-tool",
+  "agent-tool": "agent-tool",
+  "agent-done": "agent-tool",
+  "agent-error": "agent-tool",
+  "agent-thinking": "agent-thinking",
+  "agent-text": "agent-tool",
   "file-change": "file-change",
   "status": "status",
 };
@@ -285,9 +285,9 @@ export class UI {
     this.connectBtn.textContent = connected ? "Disconnect" : "Connect";
   }
 
-  setClaudeWorking(working: boolean): void {
+  setAgentWorking(working: boolean): void {
     if (working) {
-      this.statusText.textContent = "Claude working...";
+      this.statusText.textContent = "Agent working...";
       this.statusDot.className = "status-dot recording";
     } else {
       this.statusText.textContent = "Connected";
@@ -413,12 +413,45 @@ export class UI {
     this.appendTimeline(cat, tag, result, true);
   }
 
-  addGeminiSummarize(functionName: string): void {
-    this.appendTimeline("gemini-summarize", "Summarizing", `Relaying Claude's ${functionName} response`);
+  addGeminiImage(prompt: string, base64Data: string): void {
+    const entry = document.createElement("div");
+    entry.className = `tl-entry cat-gemini-tool-result`;
+    entry.dataset.category = "gemini-tool-result";
+
+    const time = this.timeStamp();
+    entry.innerHTML = `
+      <span class="tl-time">${time}</span> 
+      <span class="tl-tag">Image</span> 
+      <div class="tl-detail">
+        <p><em>${escapeHtml(prompt)}</em></p>
+        <img src="data:image/png;base64,${base64Data}" class="generated-image" style="max-width: 100%; border-radius: 8px; margin-top: 8px; cursor: pointer;" />
+      </div>`;
+    
+    // Click to open full size
+    entry.querySelector("img")?.addEventListener("click", () => {
+      const win = window.open();
+      win?.document.write(`<img src="data:image/png;base64,${base64Data}" style="max-width: 100vw;" />`);
+    });
+
+    this.timeline.appendChild(entry);
+    this.timeline.scrollTop = this.timeline.scrollHeight;
+    
+    // Also update canvas
+    this.updateLiveCanvas(`
+      <div class="canvas-image">
+        <h4>Generated Image</h4>
+        <p><em>${escapeHtml(prompt)}</em></p>
+        <img src="data:image/png;base64,${base64Data}" style="max-width: 100%; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);" />
+      </div>
+    `);
   }
 
-  // Claude events
-  addActivityEvent(event: ClaudeToolUseEvent): void {
+  addGeminiSummarize(functionName: string): void {
+    this.appendTimeline("gemini-summarize", "Summarizing", `Relaying Agent's ${functionName} response`);
+  }
+
+  // Agent events
+  addActivityEvent(event: AgentToolUseEvent): void {
     const icon = toolIcon(event.tool);
     let detail = "";
 
@@ -432,7 +465,7 @@ export class UI {
       detail = event.tool;
     }
 
-    this.appendTimeline("claude-tool", `${icon} ${event.tool}`, detail);
+    this.appendTimeline("agent-tool", `${icon} ${event.tool}`, detail);
 
     // Also add inline diffs for Edit/Write
     if (event.tool === "Edit") {
@@ -451,17 +484,17 @@ export class UI {
   }
 
   addActivityDone(isError: boolean): void {
-    const cat: EventCategory = isError ? "claude-error" : "claude-done";
+    const cat: EventCategory = isError ? "agent-error" : "agent-done";
     const tag = isError ? "Error" : "Done";
     this.appendTimeline(cat, tag, isError ? "Task failed" : "Task completed");
   }
 
-  addThinking(text: string): void {
-    this.appendTimeline("claude-thinking", "Claude Thinking", text, true);
+  addAgentThinking(text: string): void {
+    this.appendTimeline("agent-thinking", "Agent Thinking", text, true);
   }
 
-  addClaudeText(text: string): void {
-    this.appendTimeline("claude-text", "Claude", text, true);
+  addAgentText(text: string): void {
+    this.appendTimeline("agent-text", "Agent", text, true);
     
     // Attempt to extract markdown blocks to render in Live Canvas
     const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/;

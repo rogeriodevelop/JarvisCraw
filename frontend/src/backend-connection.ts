@@ -1,8 +1,8 @@
 /**
  * BackendConnection — WebSocket to Python backend for function call routing.
  *
- * Receives Claude events (tool_use, text, result) and forwards them to the UI.
- * Sends function calls from Gemini to the backend for Claude execution.
+ * Receives Agent events (tool_use, text, result) and forwards them to the UI.
+ * Sends function calls from Gemini to the backend for Agent execution.
  */
 
 import type { BackendMessage } from "./types";

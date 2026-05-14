@@ -1,7 +1,7 @@
 /**
- * NarrationConnection — Second Gemini Live session for narrating Claude's activity.
+ * NarrationConnection — Second Gemini Live session for narrating Agent's activity.
  *
- * Speaks real-time commentary while Claude is working, so the user isn't
+ * Speaks real-time commentary while Agent is working, so the user isn't
  * left in silence. Coordinates with main Gemini: only plays audio when
  * main Gemini is waiting for a function response.
  */
@@ -134,7 +134,7 @@ export class NarrationConnection {
   }
 
   /**
-   * Send a Claude activity event for narration.
+   * Send an Agent activity event for narration.
    * Events are batched to avoid overwhelming the narrator.
    */
   sendEvent(description: string): void {
@@ -172,7 +172,7 @@ export class NarrationConnection {
 
   /**
    * Send an immediate message (not batched). Use for important events
-   * like "Claude started working" or "Task complete".
+   * like "Agent started working" or "Task complete".
    */
   sendImmediate(text: string): void {
     if (!this.session || !this.connected || this.muted) return;

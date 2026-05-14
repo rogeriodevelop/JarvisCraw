@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from google import genai
 
 
-MODEL = "gemini-2.5-flash-native-audio-latest"
+MODEL = "models/gemini-2.5-flash-native-audio-latest"
 
 
 def create_ephemeral_token() -> dict:

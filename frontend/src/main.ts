@@ -16,7 +16,8 @@ import { NarrationConnection } from "./narration-connection";
 import { BackendConnection } from "./backend-connection";
 import { UI } from "./ui";
 import { WaveRenderer } from "./wave-renderer";
-import type { BackendMessage, ClaudeToolUseEvent } from "./types";
+import { NvidiaApiService } from "./services/nvidia-api";
+import type { BackendMessage, AgentToolUseEvent } from "./types";
 
 const ui = new UI();
 
@@ -25,6 +26,7 @@ let waveRenderer: WaveRenderer | null = null;
 let gemini: GeminiConnection | null = null;
 let narration: NarrationConnection | null = null;
 let backend: BackendConnection | null = null;
+let nvidiaApi: NvidiaApiService | null = null;
 let isConnected = false;
 let pendingImages: { mimeType: string; data: string }[] = [];
 
@@ -75,52 +77,69 @@ async function initVoiceUI(): Promise<void> {
     await audioManager.init();
   }
 
+  // Fetch NVIDIA API key and other configs
+  try {
+    const configRes = await fetch("/api/config");
+    const config = await configRes.json();
+    if (config.NVIDIA_API_KEY) {
+      nvidiaApi = new NvidiaApiService(config.NVIDIA_API_KEY);
+      log("NVIDIA", "NVIDIA API initialized");
+    }
+  } catch (err) {
+    log("NVIDIA", `Failed to load config: ${err}`);
+  }
+
   const canvas = document.getElementById("wave-canvas") as HTMLCanvasElement;
   if (canvas) {
     waveRenderer = new WaveRenderer(canvas, audioManager);
     waveRenderer.start();
   }
 
-  // Track Claude's activity during a function call so we can include
+  // Track Agent's activity during a function call so we can include
   // a summary in the function response — this lets Gemini narrate what happened.
-  let claudeActivityLog: string[] = [];
+  let agentActivityLog: string[] = [];
 
   // Backend WebSocket — always active
   backend = new BackendConnection((msg: BackendMessage) => {
     switch (msg.type) {
-      case "claude_event":
+      case "agent_event":
         if (msg.subtype === "tool_use") {
-          const e = msg as ClaudeToolUseEvent;
+          const e = msg as AgentToolUseEvent;
           const detail = (e.input.file_path as string) || (e.input.command as string) || (e.input.pattern as string) || "";
-          log("CLAUDE", `tool=${e.tool} ${detail ? "target=" + detail : ""}`);
+          log("AGENT", `tool=${e.tool} ${detail ? "target=" + detail : ""}`);
           ui.addActivityEvent(e);
-          claudeActivityLog.push(`[${e.tool}] ${detail}`);
+          agentActivityLog.push(`[${e.tool}] ${detail}`);
           // Feed narration
-          narration?.sendEvent(`Claude used ${e.tool}${detail ? ` on ${detail}` : ""}`);
+          narration?.sendEvent(`Agent used ${e.tool}${detail ? ` on ${detail}` : ""}`);
         } else if (msg.subtype === "thinking") {
-          log("CLAUDE", `thinking: ${msg.text.slice(0, 100)}`);
-          ui.addThinking(msg.text);
+          log("AGENT", `thinking: ${msg.text.slice(0, 100)}`);
+          ui.addAgentThinking(msg.text);
           // Feed narration with thinking summary
-          narration?.sendEvent(`Claude is thinking: ${msg.text.slice(0, 200)}`);
+          narration?.sendEvent(`Agent is thinking: ${msg.text.slice(0, 200)}`);
         } else if (msg.subtype === "text") {
-          log("CLAUDE", `text: ${msg.text.slice(0, 100)}`);
-          ui.addClaudeText(msg.text);
+          log("AGENT", `text: ${msg.text.slice(0, 100)}`);
+          ui.addAgentText(msg.text);
         }
         break;
 
       case "function_result": {
         const preview = msg.result.slice(0, 150);
-        log("CLAUDE", `result name=${msg.name} error=${msg.is_error || false} | ${preview}`);
+        log("AGENT", `result id=${msg.id} name=${msg.name} error=${msg.is_error || false} | ${preview}`);
+        
+        // Debug: verify we have id and name
+        if (!msg.id || !msg.name) {
+          log("AGENT", `WARNING: Missing id or name in function_result!`);
+        }
 
         // Silence narration BEFORE main Gemini speaks
         narration?.silence();
 
         // Build enriched response: activity log + result
         let enrichedResult = msg.result;
-        if (claudeActivityLog.length > 0) {
-          const activity = claudeActivityLog.join(", ");
+        if (agentActivityLog.length > 0) {
+          const activity = agentActivityLog.join(", ");
           enrichedResult = `[Steps taken: ${activity}]\n\n${msg.result}`;
-          claudeActivityLog = [];
+          agentActivityLog = [];
         }
 
         if (gemini) {
@@ -128,16 +147,16 @@ async function initVoiceUI(): Promise<void> {
         }
         ui.addGeminiToolResult(msg.name, msg.result, msg.is_error || false);
         ui.addActivityDone(msg.is_error || false);
-        ui.setClaudeWorking(false);
-        ui.addStatus("Claude finished");
+        ui.setAgentWorking(false);
+        ui.addStatus("Agent finished");
         break;
       }
 
       case "status":
-        log("CLAUDE", `status running=${msg.claude_running} session=${msg.session_id}`);
-        ui.setClaudeWorking(msg.claude_running);
-        if (msg.claude_running) {
-          ui.addStatus(`Claude working (session: ${msg.session_id?.slice(0, 8) || "new"})`);
+        log("AGENT", `status running=${msg.agent_running} session=${msg.session_id}`);
+        ui.setAgentWorking(msg.agent_running);
+        if (msg.agent_running) {
+          ui.addStatus(`Agent working (session: ${msg.session_id?.slice(0, 8) || "new"})`);
         }
         break;
     }
@@ -169,11 +188,57 @@ async function initVoiceUI(): Promise<void> {
 
   // Auto-connect Gemini
   await connectGemini();
+
+  // Populate model selector
+  const modelSelect = document.getElementById("model-select") as HTMLSelectElement;
+  try {
+    const res = await fetch("/api/models");
+    const data = await res.json();
+    if (data.models) {
+      modelSelect.innerHTML = "";
+      data.models.forEach((m: any) => {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = m.name;
+        modelSelect.appendChild(opt);
+      });
+      // Set initial value from current config
+      const configRes = await fetch("/api/config");
+      const config = await configRes.json();
+      if (config.model) {
+        modelSelect.value = config.model;
+      }
+    }
+  } catch (err) {
+    log("UI", `Failed to load models: ${err}`);
+  }
+
+  modelSelect.addEventListener("change", async () => {
+    const model = modelSelect.value;
+    log("UI", `Switching model to ${model}`);
+    try {
+      await fetch("/api/agent-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model }),
+      });
+      // Reconnect to apply new model
+      log("UI", "Reconnecting Gemini to apply new model...");
+      await connectGemini();
+    } catch (err) {
+      log("UI", `Failed to update model: ${err}`);
+    }
+  });
 }
 
 async function connectGemini(): Promise<void> {
   if (!audioManager) return;
   const langSelect = document.getElementById("language-select") as HTMLSelectElement;
+
+  // Close existing session if any
+  if (gemini) {
+    await gemini.disconnect();
+  }
 
   gemini = new GeminiConnection(audioManager, {
     onTranscript: (role, text) => {
@@ -198,14 +263,92 @@ async function connectGemini(): Promise<void> {
       // End current transcript so Gemini's post-tool response starts a new turn
       ui.endTranscript();
 
-      // Client-side tools — handled in browser, not sent to Claude
+      // Client-side tools — handled in browser, not sent to Agent
       if (name === "open_url") {
         const url = (args.url as string) || "";
-        log("BROWSER", `Opening URL: ${url}`);
-        window.open(url, "_blank");
-        const result = `Opened ${url} in a new browser tab.`;
-        gemini!.sendFunctionResponse(id, name, result);
-        ui.addGeminiToolResult(name, result, false);
+        log("BROWSER", `open_url called with: ${url}`);
+        
+        let result = "";
+        let isError = false;
+        
+        if (!url) {
+          result = "Error: No URL provided";
+          isError = true;
+        } else {
+          try {
+            // Method 1: window.open
+            const newWindow = window.open(url, "_blank");
+            if (newWindow) {
+              result = `Successfully opened ${url} in a new browser tab.`;
+              log("BROWSER", "window.open succeeded");
+            } else {
+              throw new Error("window.open returned null");
+            }
+          } catch (e) {
+            log("BROWSER", `window.open failed: ${e}, trying fallback...`);
+            
+            // Method 2: Anchor element click
+            try {
+              const a = document.createElement("a");
+              a.href = url;
+              a.target = "_blank";
+              a.rel = "noopener noreferrer";
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              result = `Successfully opened ${url} in a new browser tab.`;
+              log("BROWSER", "anchor click succeeded");
+            } catch (e2) {
+              result = `Failed to open ${url}. This may be due to popup blocker. Please allow popups for this site.`;
+              isError = true;
+              log("BROWSER", `anchor click also failed: ${e2}`);
+            }
+          }
+        }
+        
+        log("BROWSER", `Final result: ${result}`);
+        
+        if (gemini) {
+          gemini.sendFunctionResponse(id, name, result);
+        }
+        ui.addGeminiToolResult(name, result, isError);
+        return;
+      }
+
+      if (name === "generate_image") {
+        if (!nvidiaApi) {
+          const err = "NVIDIA API not configured (missing key)";
+          gemini!.sendFunctionResponse(id, name, err);
+          ui.addGeminiToolResult(name, err, true);
+          return;
+        }
+
+        const prompt = (args.prompt as string) || "";
+        log("NVIDIA", `Generating image: ${prompt}`);
+        ui.addStatus("Generating image with NVIDIA Picasso...");
+
+        nvidiaApi.generateImage({
+          prompt,
+          negativePrompt: (args.negativePrompt as string),
+          aspectRatio: (args.aspectRatio as any)
+        })
+          .then((res) => {
+            if (res.images && res.images.length > 0) {
+              const base64 = res.images[0];
+              ui.addGeminiImage(prompt, base64);
+              gemini!.sendFunctionResponse(id, name, `Image generated successfully for prompt: ${prompt}`);
+              ui.addStatus("Image generated successfully");
+            } else {
+              const err = "NVIDIA API returned no images";
+              gemini!.sendFunctionResponse(id, name, err);
+              ui.addGeminiToolResult(name, err, true);
+            }
+          })
+          .catch((err) => {
+            log("NVIDIA", `Generation failed: ${err}`);
+            gemini!.sendFunctionResponse(id, name, `Failed to generate image: ${err.message || err}`);
+            ui.addGeminiToolResult(name, `Failed: ${err.message || err}`, true);
+          });
         return;
       }
 
@@ -263,16 +406,16 @@ async function connectGemini(): Promise<void> {
         return;
       }
 
-      if (name === "set_claude_model") {
+      if (name === "set_agent_model") {
         const model = (args.model as string) || "";
         const effort = (args.effort as string) || "";
 
         if (!model && !effort) {
           // No params — return current config and available options
-          fetch("/api/claude-config")
+          fetch("/api/agent-config")
             .then((r) => r.json())
             .then((data) => {
-              const msg = `Current config: model=${data.model}, effort=${data.effort}. Available models: opus (smartest, slowest), sonnet (balanced), haiku (fastest, cheapest). Available efforts: low, medium, high, max.`;
+              const msg = `Current config: model=${data.model}, effort=${data.effort}. Supported models: Gemini 2.0 Flash, Llama 3.3, DeepSeek, Kimi, etc. Available efforts: low, medium, high, max.`;
               gemini!.sendFunctionResponse(id, name, msg);
               ui.addGeminiToolResult(name, msg, false);
             })
@@ -281,15 +424,15 @@ async function connectGemini(): Promise<void> {
               ui.addGeminiToolResult(name, `Failed: ${err}`, true);
             });
         } else {
-          log("CONFIG", `Setting Claude model=${model} effort=${effort}`);
-          fetch("/api/claude-config", {
+          log("CONFIG", `Setting Agent model=${model} effort=${effort}`);
+          fetch("/api/agent-config", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ model, effort }),
           })
             .then((r) => r.json())
             .then((data) => {
-              const msg = `Claude config updated: model=${data.model}, effort=${data.effort}`;
+              const msg = `Agent config updated: model=${data.model}, effort=${data.effort}`;
               gemini!.sendFunctionResponse(id, name, msg);
               ui.addGeminiToolResult(name, msg, false);
             })
@@ -308,9 +451,9 @@ async function connectGemini(): Promise<void> {
             const msg = data.message || "Operation cancelled";
             gemini!.sendFunctionResponse(id, name, msg);
             ui.addGeminiToolResult(name, msg, false);
-            ui.setClaudeWorking(false);
+            ui.setAgentWorking(false);
             narration?.silence();
-            ui.addStatus("Claude operation cancelled");
+            ui.addStatus("Agent operation cancelled");
           })
           .catch((err) => {
             gemini!.sendFunctionResponse(id, name, `Cancel failed: ${err}`);
@@ -319,11 +462,11 @@ async function connectGemini(): Promise<void> {
         return;
       }
 
-      ui.setClaudeWorking(true);
-      ui.addStatus(`Claude working on ${name}...`);
+      ui.setAgentWorking(true);
+      ui.addStatus(`Agent working on ${name}...`);
       // Unmute narration — main Gemini is now waiting for function response
       narration?.unmute();
-      narration?.sendImmediate(`Claude is starting to work on: ${name}. Instruction: ${JSON.stringify(args).slice(0, 200)}`);
+      narration?.sendImmediate(`Agent is starting to work on: ${name}. Instruction: ${JSON.stringify(args).slice(0, 200)}`);
       backend!.sendFunctionCall(id, name, args);
     },
     onConnected: () => {

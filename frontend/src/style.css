@@ -1002,42 +1002,42 @@ html, body {
   color: #a371f7;
 }
 
-/* Claude Tool Use — light cyan */
-.tl-entry.cat-claude-tool {
+/* Agent Tool Use — light cyan */
+.tl-entry.cat-agent-tool {
   border-left-color: #79efff;
 }
-.tl-entry.cat-claude-tool .tl-tag {
+.tl-entry.cat-agent-tool .tl-tag {
   background: rgba(121, 239, 255, 0.1);
   color: #79efff;
 }
 
-/* Claude Done — green */
-.tl-entry.cat-claude-done {
+/* Agent Done — green */
+.tl-entry.cat-agent-done {
   border-left-color: #3fb950;
 }
-.tl-entry.cat-claude-done .tl-tag {
+.tl-entry.cat-agent-done .tl-tag {
   background: rgba(63, 185, 80, 0.15);
   color: #3fb950;
 }
 
-/* Claude Error — red */
-.tl-entry.cat-claude-error {
+/* Agent Error — red */
+.tl-entry.cat-agent-error {
   border-left-color: #f85149;
 }
-.tl-entry.cat-claude-error .tl-tag {
+.tl-entry.cat-agent-error .tl-tag {
   background: rgba(248, 81, 73, 0.15);
   color: #f85149;
 }
 
-/* Claude Thinking — purple */
-.tl-entry.cat-claude-thinking {
+/* Agent Thinking — purple */
+.tl-entry.cat-agent-thinking {
   border-left-color: #bc8cff;
 }
-.tl-entry.cat-claude-thinking .tl-tag {
+.tl-entry.cat-agent-thinking .tl-tag {
   background: rgba(188, 140, 255, 0.15);
   color: #bc8cff;
 }
-.tl-entry.cat-claude-thinking .tl-detail {
+.tl-entry.cat-agent-thinking .tl-detail {
   color: var(--text-secondary);
   font-style: italic;
   white-space: pre-wrap;
@@ -1057,15 +1057,15 @@ html, body {
   font-style: italic;
 }
 
-/* Claude Text output — light green */
-.tl-entry.cat-claude-text {
+/* Agent Text output — light green */
+.tl-entry.cat-agent-text {
   border-left-color: #7ee787;
 }
-.tl-entry.cat-claude-text .tl-tag {
+.tl-entry.cat-agent-text .tl-tag {
   background: rgba(126, 231, 135, 0.15);
   color: #7ee787;
 }
-.tl-entry.cat-claude-text .tl-detail {
+.tl-entry.cat-agent-text .tl-detail {
   white-space: pre-wrap;
   word-break: break-word;
 }
