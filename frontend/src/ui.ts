@@ -496,26 +496,30 @@ export class UI {
   addAgentText(text: string): void {
     this.appendTimeline("agent-text", "Agent", text, true);
     
-    // Attempt to extract markdown blocks to render in Live Canvas
-    const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/;
-    const match = text.match(codeBlockRegex);
-    if (match) {
-      const language = match[1];
+    // Extract all code blocks
+    const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+    let match;
+    let hasCode = false;
+    let canvasHtml = "";
+
+    while ((match = codeBlockRegex.exec(text)) !== null) {
+      hasCode = true;
+      const language = match[1] || "code";
       const code = match[2];
       
-      // Render to canvas
-      let canvasHtml = `<div class="canvas-header-lang">${language.toUpperCase()} Output</div>`;
+      canvasHtml += `<div class="canvas-header-lang">${language.toUpperCase()}</div>`;
       
       if (language.toLowerCase() === 'html' || language.toLowerCase() === 'svg') {
-         // Render the actual HTML/SVG if safe, but for now we just show it safely
-         // For a true "Live Canvas", rendering raw SVG/HTML is powerful. Let's do it safely or as text
-         canvasHtml += `<div class="canvas-render-box">${code}</div>`;
+          canvasHtml += `<div class="canvas-render-box">${code}</div>`;
       } else {
-         canvasHtml += `<pre><code>${escapeHtml(code)}</code></pre>`;
+          canvasHtml += `<pre><code>${escapeHtml(code)}</code></pre>`;
       }
+    }
+
+    if (hasCode) {
       this.updateLiveCanvas(canvasHtml);
-    } else {
-      // Just put the rendered markdown in the canvas as a summary
+    } else if (text.length > 50) {
+      // For longer texts without code, show as markdown summary
       const rendered = marked.parse(text) as string;
       this.updateLiveCanvas(`<div class="canvas-md">${rendered}</div>`);
     }

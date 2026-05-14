@@ -46,6 +46,14 @@ def list_directory(directory: str = ".") -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
+def create_directory(path: str) -> str:
+    """Creates a directory and all parent directories."""
+    try:
+        os.makedirs(path, exist_ok=True)
+        return f"Successfully created directory: {path}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
 def computer_control(action: str, x: int = None, y: int = None, text: str = None, key: str = None, keys: list = None) -> str:
     """Controls the mouse and keyboard using PyAutoGUI."""
     import pyautogui
@@ -256,6 +264,20 @@ OPENAI_TOOLS = [
                 "required": ["action", "instruction"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_directory",
+            "description": "Creates a directory and all parent directories.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to create."}
+                },
+                "required": ["path"]
+            }
+        }
     }
 ]
 
@@ -401,7 +423,7 @@ class AgentRunner:
         ]
         
         # Tool filtering
-        all_tools = [run_bash_command, read_file, write_file, list_directory, computer_control, launch_app, manage_background_task]
+        all_tools = [run_bash_command, read_file, write_file, list_directory, create_directory, computer_control, launch_app, manage_background_task]
         if allowed_tools:
             allowed_names = [t.strip().lower() for t in allowed_tools.split(",")]
             print(f"DEBUG: allowed_tools = {allowed_tools}, parsed names = {allowed_names}")
@@ -427,7 +449,9 @@ class AgentRunner:
                 "launch_app": launch_app,
                 "open_app": launch_app,
                 "background_task": manage_background_task,
-                "monitor": manage_background_task
+                "monitor": manage_background_task,
+                "create_directory": create_directory,
+                "mkdir": create_directory
             }
             tools = []
             has_search = False
@@ -690,6 +714,8 @@ class AgentRunner:
                 return computer_control(**args_dict)
             elif func_name == "launch_app":
                 return launch_app(args_dict.get("name", ""))
+            elif func_name == "create_directory":
+                return create_directory(get_abs_path(args_dict.get("path", "")))
             elif func_name == "manage_background_task":
                 return manage_background_task(**args_dict)
             else:

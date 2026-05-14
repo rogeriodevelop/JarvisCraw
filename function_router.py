@@ -127,6 +127,34 @@ class FunctionRouter:
             ):
                 yield event
 
+        elif name == "write_file":
+            path = args.get("path", "")
+            content = args.get("content", "")
+            async for event in self.agent.run(
+                instruction=f"Write content to file at {path}: {content[:100]}...",
+                mode="edit",
+                allowed_tools="write",
+            ):
+                yield event
+
+        elif name == "create_directory":
+            path = args.get("path", "")
+            async for event in self.agent.run(
+                instruction=f"Create directory at {path}",
+                mode="edit",
+                allowed_tools="create_directory",
+            ):
+                yield event
+
+        elif name == "list_directory":
+            path = args.get("path", ".")
+            async for event in self.agent.run(
+                instruction=f"List directory at {path}",
+                mode="edit",
+                allowed_tools="ls",
+            ):
+                yield event
+
         else:
             yield {
                 "type": "function_result",

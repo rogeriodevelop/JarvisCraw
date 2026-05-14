@@ -235,6 +235,39 @@ export const functionDeclarations: FunctionDeclaration[] = [
       required: ["action", "instruction"],
     },
   },
+  {
+    name: "write_file",
+    description: "Create or update a file with specific content. Much safer than run_command for writing files.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Path to the file" },
+        content: { type: "string", description: "Content to write" },
+      },
+      required: ["path", "content"],
+    },
+  },
+  {
+    name: "create_directory",
+    description: "Create a new directory (and parent directories if needed).",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Path to the directory" },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "list_directory",
+    description: "List contents of a directory.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Path to list (default is current directory)" },
+      },
+    },
+  },
 ];
 
 // ── WebSocket Messages (Browser ↔ Backend) ───────────────────
