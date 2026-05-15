@@ -22,6 +22,24 @@
   --diff-removed-text: #ff3333;
 }
 
+/* ── Protocolo Vingador ── */
+body.vingador {
+  --bg-primary: #120404;
+  --bg-secondary: rgba(33, 6, 6, 0.85);
+  --bg-tertiary: rgba(255, 0, 0, 0.05);
+  --border: rgba(255, 51, 51, 0.2);
+  --border-glow: rgba(255, 51, 51, 0.5);
+  --text-secondary: #ff3333;
+  --accent: #ff3333;
+  --accent-glow: 0 0 15px rgba(255, 51, 51, 0.4);
+}
+
+body.vingador {
+  background-image: 
+    linear-gradient(rgba(255, 0, 0, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 0, 0, 0.04) 1px, transparent 1px);
+}
+
 /* J.A.R.V.I.S. Background Grid */
 html, body {
   height: 100%;
@@ -966,25 +984,43 @@ html, body {
   border-radius: 2px;
 }
 
-.canvas-save-btn {
+.canvas-actions {
   position: absolute;
   top: 8px;
   right: 8px;
-  background: var(--slate-700);
-  color: var(--cyan-400);
-  border: 1px solid var(--cyan-900);
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.2s;
+  display: flex;
+  gap: 8px;
   z-index: 10;
 }
 
-.canvas-save-btn:hover {
-  background: var(--cyan-950);
-  border-color: var(--cyan-400);
-  box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
+.canvas-btn {
+  background: rgba(6, 17, 33, 0.9);
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.canvas-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--border);
+}
+
+.canvas-unified-save-btn {
+  color: var(--warning);
+  border-color: rgba(255, 140, 0, 0.3);
+}
+
+.canvas-unified-save-btn:hover {
+  border-color: var(--warning);
+  box-shadow: 0 0 10px rgba(255, 140, 0, 0.3);
 }
 
 .canvas-code-wrapper {

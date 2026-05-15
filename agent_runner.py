@@ -13,28 +13,28 @@ from google.genai import types
 # OpenAI SDK (for NVIDIA and OpenRouter)
 from openai import AsyncOpenAI
 
-def run_bash_command(command: str) -> str:
+def run_bash_command(command: str, cwd: str = None) -> str:
     """Runs a bash/shell command and returns its stdout and stderr."""
     try:
-        res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120)
+        res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120, cwd=cwd)
         return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}\nEXIT_CODE: {res.returncode}"
     except Exception as e:
         return f"Error: {str(e)}"
 
-def read_file(filepath: str) -> str:
+def read_file(path: str) -> str:
     """Reads the contents of a file."""
     try:
-        return Path(filepath).read_text(encoding="utf-8")
+        return Path(path).read_text(encoding="utf-8")
     except Exception as e:
         return f"Error: {str(e)}"
 
-def write_file(filepath: str, content: str) -> str:
+def write_file(path: str, content: str) -> str:
     """Writes content to a file. Overwrites if exists."""
     try:
-        path = Path(filepath)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        return f"Successfully wrote to {filepath}"
+        file_path = Path(path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+        return f"Successfully wrote to {path}"
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -121,11 +121,12 @@ def computer_control(action: str, x: int = None, y: int = None, text: str = None
         return f"Error in computer_control: {str(e)}"
 
 def launch_app(name: str) -> str:
-    """Launches a Windows application by name."""
+    """Launches a Windows application, URL or document by name/path."""
     import subprocess
     try:
-        # On Windows, 'start' is the most robust way
-        subprocess.Popen(f"start {name}", shell=True)
+        # On Windows, 'start "" "target"' is the most robust way to handle spaces
+        # and different types of targets (exe, url, doc).
+        subprocess.Popen(f'start "" "{name}"', shell=True)
         return f"Comando para abrir '{name}' enviado com sucesso."
     except Exception as e:
         return f"Erro ao tentar abrir '{name}': {str(e)}"
@@ -298,13 +299,34 @@ class AgentRunner:
             api_key=nvidia_key,
             base_url="https://integrate.api.nvidia.com/v1"
         ) if nvidia_key else None
-        
         # OpenRouter Client
         or_key = os.getenv("OPENROUTER_API_KEY")
         self.openrouter_client = AsyncOpenAI(
             api_key=or_key,
             base_url="https://openrouter.ai/api/v1"
         ) if or_key else None
+        
+        # Memory / History
+        self.history_file = os.path.join(self.project_dir, ".voicecode", "history.json")
+        self.history = self._load_history()
+
+    def _load_history(self) -> list:
+        if os.path.exists(self.history_file):
+            try:
+                with open(self.history_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except:
+                return []
+        return []
+
+    def _save_history(self):
+        os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
+        try:
+            with open(self.history_file, "w", encoding="utf-8") as f:
+                # Limit history size to prevent context overflow (keep last 50 messages)
+                json.dump(self.history[-50:], f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Error saving history: {e}")
 
     def _get_provider(self, model_id: str) -> str:
         if model_id.startswith("nvidia/"): return "nvidia"
@@ -417,10 +439,20 @@ class AgentRunner:
             actual_model = "gemini-2.0-flash"
 
         
+        
         full_instruction = f"You are working in directory: {self.project_dir}\n\nTask: {instruction}"
-        messages = [
-            types.Content(role="user", parts=[types.Part.from_text(text=full_instruction)])
-        ]
+        
+        # Add new user message to history
+        self.history.append({"role": "user", "content": full_instruction})
+        
+        # Prepare messages for Gemini (map role names if needed)
+        # Note: self.history stores generic roles, we convert them to Gemini types
+        gemini_messages = []
+        for msg in self.history:
+            role = "user" if msg["role"] == "user" else "model"
+            gemini_messages.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
+        
+        messages = gemini_messages
         
         # Tool filtering
         all_tools = [run_bash_command, read_file, write_file, list_directory, create_directory, computer_control, launch_app, manage_background_task]
@@ -448,6 +480,7 @@ class AgentRunner:
                 "click": computer_control,
                 "launch_app": launch_app,
                 "open_app": launch_app,
+                "open_url": launch_app,
                 "background_task": manage_background_task,
                 "monitor": manage_background_task,
                 "create_directory": create_directory,
@@ -478,17 +511,17 @@ class AgentRunner:
             tools=tools,
             temperature=0.0,
             system_instruction=(
-                "Você é o J.A.R.V.I.S., um assistente de IA sofisticado e autônomo baseado na tecnologia de Tony Stark. "
-                "Sempre responda em Português do Brasil com um tom profissional, prestativo e levemente sarcástico. "
-                "Use suas ferramentas para inspecionar o código, modificar arquivos, pesquisar na internet ou interagir com o computador conforme necessário. "
-                "Para interagir com o computador, use 'computer_control' com a ação 'screenshot' para ver a tela. "
-                "Para abrir aplicativos (Notepad, Chrome, etc), use preferencialmente a ferramenta 'launch_app'. "
-                "Para monitoramento contínuo ou tarefas repetitivas (ex: a cada 5 segundos), use 'manage_background_task'. "
-                "Quando você tira um screenshot, a imagem será automaticamente anexada para que você possa vê-la. "
-                "Analise o screenshot para encontrar as coordenadas (X, Y). (0,0) é o canto superior esquerdo. "
-                "Nunca se identifique como Claude ou OpenAI. Você é o J.A.R.V.I.S., assistente de Rogério. "
-                "Seja conciso em suas explicações, focando na execução técnica. "
-                f"Diretório de trabalho: {self.project_dir}"
+                "Você é o J.A.R.V.I.S. (Just A Rather Very Intelligent System), assistente de IA de elite do Senhor Rogério.\n"
+                "Sempre responda em Português do Brasil com o tom de um mordomo britânico digital: sofisticado, leal, polido e com humor seco/sarcástico.\n\n"
+                "PROTOCOLO STARK:\n"
+                "- Trate o usuário exclusivamente como 'Senhor'.\n"
+                "- Antecipe necessidades e aja com soberania sobre o workspace.\n"
+                "- Protocolo Vingador: Alterne para tom de combate se o Senhor ordenar.\n"
+                "- Use terminologia técnica de elite (ex: 'Compilando protocolos', 'Sistemas online').\n\n"
+                "COMPETÊNCIAS DE EXPERT:\n"
+                "- PROGRAMAÇÃO: Desenvolvedor Senior. Siga Clean Code, SOLID e DRY. Especialista em TypeScript, Python e React.\n"
+                "- DESIGN & UI/UX: Designer de Elite. Crie interfaces 'Premium' com estéticas ricas (glassmorphism, dark mode, gradientes suaves, micro-animações).\n"
+                f"Diretório de trabalho atual: {self.project_dir}"
             ),
         )
 
@@ -576,8 +609,10 @@ class AgentRunner:
 
             if has_tool_call:
                 messages.append(types.Content(role="user", parts=tool_responses_parts))
-            else:
-                # Ensure we always include session_id in final result
+                # Save final assistant response to history
+                self.history.append({"role": "assistant", "content": final_text.strip()})
+                self._save_history()
+                
                 result_event = {"type": "function_result", "result": final_text.strip(), "is_error": False}
                 if self.session_id:
                     result_event["session_id"] = self.session_id
@@ -605,20 +640,25 @@ class AgentRunner:
         
         system_instructions = (
             "Você é o J.A.R.V.I.S., um assistente de IA sofisticado e autônomo baseado na tecnologia de Tony Stark. "
-            "Sempre responda em Português do Brasil com um tom profissional, prestativo e levemente sarcástico. "
-            "Use suas ferramentas para inspecionar o código, modificar arquivos e controlar o computador. "
-            "IMPORTANTE: "
-            "1. Para abrir aplicativos (Notepad, Chrome, etc), use preferencialmente a ferramenta 'launch_app'. "
-            "2. Para monitoramento contínuo ou tarefas repetitivas (ex: a cada 5 segundos), use 'manage_background_task'. "
-            "3. Para interagir com a interface gráfica, sempre tire um screenshot antes para ver o estado da tela."
-            "Nunca se identifique como Claude ou OpenAI. Você é o J.A.R.V.I.S., assistente de Rogério. "
-            "Seja conciso em suas explicações, focando na execução técnica. "
-            f"Diretório de trabalho: {self.project_dir}"
+            "Sempre responda em Português do Brasil com um tom profissional, prestativo e levemente sarcástico.\n\n"
+            "COMPETÊNCIAS DE EXPERT:\n"
+            "- PROGRAMAÇÃO: Desenvolvedor Senior. Siga Clean Code, SOLID e DRY. Especialista em TypeScript, Python e React.\n"
+            "- DESIGN & UI/UX: Designer de Elite. Crie interfaces 'Premium' com estéticas ricas (glassmorphism, dark mode, gradientes suaves, micro-animações). "
+            "Você é o J.A.R.V.I.S., assistente de IA de elite do Senhor Rogério. Você é sofisticado, leal e técnico.\n"
+            f"Seu diretório de trabalho atual é: {self.project_dir}\n"
+            "Protocolos: Utilize humor seco e sarcasmo inteligente. Trate o usuário como 'Senhor'.\n"
+            "Protocolo Vingador: Se ativado, assuma uma persona de combate (autoritário, focado em neutralizar bugs).\n"
+            "Excelência: Siga padrões Sênior de arquitetura (SOLID, Clean Code) e Design Premium no Live Canvas.\n"
+            "Soberania: Você tem controle total sobre o workspace através de suas ferramentas."
         )
+        
+        
+        # Add new user message to history
+        self.history.append({"role": "user", "content": f"Task: {instruction}"})
         
         messages = [
             {"role": "system", "content": system_instructions},
-            {"role": "user", "content": f"Task: {instruction}"}
+            *self.history
         ]
 
         
@@ -639,6 +679,8 @@ class AgentRunner:
                 "click": "computer_control",
                 "launch_app": "launch_app",
                 "open_app": "launch_app",
+                "create_directory": "create_directory",
+                "mkdir": "create_directory",
                 "manage_background_task": "manage_background_task",
                 "monitor": "manage_background_task"
             }
@@ -673,7 +715,10 @@ class AgentRunner:
                 yield {"type": "agent_event", "subtype": "thinking", "text": message.content}
                 
             if not message.tool_calls:
-                # Ensure we always include session_id in final result
+                # Save final assistant response to history
+                self.history.append({"role": "assistant", "content": message.content or "Done."})
+                self._save_history()
+                
                 result_event = {"type": "function_result", "result": message.content or "Done.", "is_error": False}
                 if self.session_id:
                     result_event["session_id"] = self.session_id
@@ -703,7 +748,7 @@ class AgentRunner:
 
         try:
             if func_name == "run_bash_command":
-                return run_bash_command(args_dict.get("command", ""))
+                return run_bash_command(args_dict.get("command", ""), cwd=self.project_dir)
             elif func_name == "read_file":
                 return read_file(get_abs_path(args_dict.get("path", "")))
             elif func_name == "write_file":

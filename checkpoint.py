@@ -19,7 +19,7 @@ class SessionManager:
                 return json.loads(self.state_file.read_text())
             except (json.JSONDecodeError, OSError):
                 pass
-        return {"agent_session_id": None, "gemini_handle": None, "agent_model": "google/gemini-2.0-flash", "agent_effort": "high"}
+        return {"agent_session_id": None, "agent_model": "google/gemini-2.0-flash", "agent_effort": "high"}
 
     def save(self):
         self.state_file.write_text(json.dumps(self.state, indent=2))
@@ -35,12 +35,13 @@ class SessionManager:
 
     @property
     def gemini_handle(self) -> str | None:
-        return self.state.get("gemini_handle")
+        # Prevent handle persistence to avoid Error 1008
+        return None
 
     @gemini_handle.setter
     def gemini_handle(self, value: str | None):
-        self.state["gemini_handle"] = value
-        self.save()
+        # Ignore attempts to save handle
+        pass
 
     @property
     def agent_model(self) -> str | None:

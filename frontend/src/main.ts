@@ -259,6 +259,18 @@ async function connectGemini(): Promise<void> {
   gemini = new GeminiConnection(audioManager, {
     onTranscript: (role, text) => {
       ui.addTranscript(role, text);
+      
+      // Protocolo Vingador Detection
+      if (role === "user") {
+        const lower = text.toLowerCase();
+        if (lower.includes("protocolo vingador")) {
+          document.body.classList.add("vingador");
+          log("PROTOCOL", "AVENGER PROTOCOL ACTIVATED");
+        } else if (lower.includes("descansar") || lower.includes("protocolo padrão") || lower.includes("protocolo jarvis")) {
+          document.body.classList.remove("vingador");
+          log("PROTOCOL", "STAND DOWN - DEFAULT PROTOCOLS RESTORED");
+        }
+      }
     },
     onTurnComplete: () => {
       ui.endTranscript();

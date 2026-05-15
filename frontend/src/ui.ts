@@ -539,10 +539,14 @@ export class UI {
       
       canvasHtml += `<div class="canvas-header-lang">${language.toUpperCase()}</div>`;
       
-      // If it's HTML or SVG, wrap it in a render box for live viewing
-      if (language.toLowerCase() === 'html' || language.toLowerCase() === 'svg') {
+      // If it's HTML, wrap it in an iframe for isolation
+      if (language.toLowerCase() === 'html') {
+          canvasHtml += `
+            <div class="canvas-render-box">
+              <iframe sandbox="allow-scripts allow-modals" srcdoc="${escapeAttr(code)}" style="width:100%; height:400px; border:none; background:white; border-radius:4px;"></iframe>
+            </div>`;
+      } else if (language.toLowerCase() === 'svg') {
           const isSvg = language.toLowerCase() === 'svg';
-          // Ensure SVG has a container if it's just paths
           const displayCode = isSvg && !code.trim().startsWith('<svg') 
             ? `<svg viewBox="0 0 100 100" style="width:100%; height:auto;">${code}</svg>` 
             : code;
@@ -552,7 +556,9 @@ export class UI {
       canvasHtml += `
         <div class="canvas-code-wrapper">
           <pre><code>${escapeHtml(code)}</code></pre>
-          <button class="canvas-btn canvas-save-btn" data-code="${escapeAttr(code)}">💾 Save to File</button>
+          <div class="canvas-actions">
+            <button class="canvas-btn canvas-unified-save-btn" data-code="${escapeAttr(code)}" data-lang="${language}">💾 Save File</button>
+          </div>
         </div>`;
 
       cleanText = cleanText.replace(match[0], `<span class="canvas-ref-tag">[View ${language.toUpperCase()} in Canvas]</span>`);
@@ -592,19 +598,42 @@ export class UI {
   }
 
   private attachSaveButtonListeners(): void {
-    const buttons = this.canvasContent.querySelectorAll(".canvas-save-btn:not([data-attached])");
+    const buttons = this.canvasContent.querySelectorAll(".canvas-unified-save-btn:not([data-attached])");
     buttons.forEach((btn) => {
       btn.setAttribute("data-attached", "true");
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const code = (btn as HTMLElement).dataset.code || "";
-        const fn = prompt("Filename to save in current project directory:", "generated_file.py");
-        if (fn && (window as any).backend) {
-          (window as any).backend.sendFunctionCall(
-            "canvas_save_" + Date.now(),
-            "save_canvas_file",
-            { path: fn, content: code }
-          );
-          alert(`Request to save ${fn} sent to Jarvis.`);
+        const lang = (btn as HTMLElement).dataset.lang || "txt";
+        
+        try {
+          // Use modern Browser API for native file picker
+          if ('showSaveFilePicker' in window) {
+            const handle = await (window as any).showSaveFilePicker({
+              suggestedName: `generated_file.${lang}`,
+              types: [{
+                description: 'Code File',
+                accept: { 'text/plain': [`.${lang}`, '.txt', '.js', '.py', '.html', '.css'] },
+              }],
+            });
+            const writable = await handle.createWritable();
+            await writable.write(code);
+            await writable.close();
+          } else {
+            // Fallback for older browsers
+            const fn = prompt("Seu navegador não suporta o seletor nativo. Digite o nome do arquivo:", `file.${lang}`);
+            if (fn && (window as any).backend) {
+              (window as any).backend.sendFunctionCall(
+                "canvas_save_" + Date.now(),
+                "save_canvas_file",
+                { path: fn, content: code }
+              );
+            }
+          }
+        } catch (err: any) {
+          if (err.name !== 'AbortError') {
+            console.error("Erro ao salvar:", err);
+            alert("Erro ao salvar arquivo.");
+          }
         }
       });
     });

@@ -111,7 +111,25 @@ class FunctionRouter:
         elif name == "launch_app":
             app_name = args.get("name", "")
             async for event in self.agent.run(
-                instruction=f"Abra o aplicativo: {app_name}",
+                instruction=f"Abra o aplicativo ou documento: {app_name}",
+                mode="edit",
+                allowed_tools="launch_app",
+            ):
+                yield event
+
+        elif name == "open_url":
+            url = args.get("url", "")
+            async for event in self.agent.run(
+                instruction=f"Abra a URL no navegador: {url}",
+                mode="edit",
+                allowed_tools="launch_app",
+            ):
+                yield event
+
+        elif name == "open_app":
+            app_name = args.get("name", "")
+            async for event in self.agent.run(
+                instruction=f"Inicie o aplicativo: {app_name}",
                 mode="edit",
                 allowed_tools="launch_app",
             ):
