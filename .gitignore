@@ -10,8 +10,12 @@ dist/
 
 # Secrets & Environment
 .env
+.env.*
+!.env.example
 *.pem
 *.key
+*.pfx
+*.cert
 
 # Logs
 *.log
