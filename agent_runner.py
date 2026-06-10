@@ -13,6 +13,9 @@ from google.genai import types
 # OpenAI SDK (for NVIDIA and OpenRouter)
 from openai import AsyncOpenAI
 
+# Obsidian memory bridge
+from obsidian_bridge import ObsidianBridge
+
 def run_bash_command(command: str, cwd: str = None) -> str:
     """Runs a bash/shell command and returns its stdout and stderr."""
     try:
@@ -156,6 +159,84 @@ def manage_background_task(action: str, instruction: str, interval: int = 5) -> 
     
     return f"Ação de background desconhecida: {action}"
 
+# ── Obsidian Memory Tool Functions ────────────────────────────
+
+_obsidian_instance: ObsidianBridge | None = None
+
+def set_obsidian_instance(instance: ObsidianBridge | None):
+    """Set the shared ObsidianBridge instance for tool functions."""
+    global _obsidian_instance
+    _obsidian_instance = instance
+
+def remember_memory(content: str, category: str = "general", tags: str = "", project: str = "") -> str:
+    """Save a memory/note to the Obsidian vault for persistent recall."""
+    if not _obsidian_instance:
+        return "Erro: Obsidian vault não configurado. Defina OBSIDIAN_VAULT_PATH no .env"
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    return _obsidian_instance.remember(content, category, tag_list, project or None)
+
+def recall_memory(query: str) -> str:
+    """Search and recall memories from the Obsidian vault."""
+    if not _obsidian_instance:
+        return "Erro: Obsidian vault não configurado. Defina OBSIDIAN_VAULT_PATH no .env"
+    return _obsidian_instance.recall(query)
+
+def search_memory(query: str) -> str:
+    """Broad search across all memories in the Obsidian vault."""
+    if not _obsidian_instance:
+        return "Erro: Obsidian vault não configurado. Defina OBSIDIAN_VAULT_PATH no .env"
+    return _obsidian_instance.search_memory(query)
+
+
+# ── Subagent Delegation Tool Functions ─────────────────────────
+
+_agent_runner_instance = None
+
+def set_agent_runner_instance(instance):
+    """Set the shared AgentRunner instance for tool delegation."""
+    global _agent_runner_instance
+    _agent_runner_instance = instance
+
+def delegate_to_programmer(instruction: str) -> str:
+    """Delega uma instrução de desenvolvimento de software fullstack complexa para o subagente especialista em programação sênior. Retorna a solução robusta e completa."""
+    if not _agent_runner_instance:
+        return "Erro: AgentRunner não inicializado para delegação."
+    import asyncio
+    import concurrent.futures
+    
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    if loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(lambda: asyncio.run(_agent_runner_instance.run_programmer(instruction)))
+            return future.result()
+    else:
+        return loop.run_until_complete(_agent_runner_instance.run_programmer(instruction))
+
+def delegate_to_designer(instruction: str) -> str:
+    """Delega uma instrução de criação de interface, design gráfico, estilo visual contemporâneo ou UX para o subagente especialista em design. Retorna a interface ou design completo."""
+    if not _agent_runner_instance:
+        return "Erro: AgentRunner não inicializado para delegação."
+    import asyncio
+    import concurrent.futures
+    
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+    if loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(lambda: asyncio.run(_agent_runner_instance.run_designer(instruction)))
+            return future.result()
+    else:
+        return loop.run_until_complete(_agent_runner_instance.run_designer(instruction))
+
 # Tool definitions for OpenAI style
 OPENAI_TOOLS = [
     {
@@ -279,6 +360,79 @@ OPENAI_TOOLS = [
                 "required": ["path"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember_memory",
+            "description": "Save a memory or note to the Obsidian vault for long-term persistent recall. Use to remember decisions, learnings, or important context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "The information to remember (Markdown supported)"},
+                    "category": {"type": "string", "enum": ["session", "project", "decision", "general"], "description": "Category of the memory"},
+                    "tags": {"type": "string", "description": "Comma-separated tags for the note"},
+                    "project": {"type": "string", "description": "Project name to link this memory to"}
+                },
+                "required": ["content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall_memory",
+            "description": "Search and recall memories from the Obsidian vault. Use to retrieve past decisions, context, or learnings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query to find relevant memories"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_memory",
+            "description": "Broad search across all memories in the Obsidian vault. Returns more results than recall.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search term"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delegate_to_programmer",
+            "description": "Delega uma instrução de desenvolvimento de software fullstack complexa para o subagente especialista em programação sênior. Retorna a solução robusta e completa.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instruction": {"type": "string", "description": "A instrução ou tarefa detalhada de programação para o especialista."}
+                },
+                "required": ["instruction"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delegate_to_designer",
+            "description": "Delega uma instrução de criação de interface, design gráfico, estilo visual contemporâneo ou UX para o subagente especialista em design. Retorna a interface ou design completo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instruction": {"type": "string", "description": "A instrução detalhada de criação de design e UX para o especialista."}
+                },
+                "required": ["instruction"]
+            }
+        }
     }
 ]
 
@@ -289,6 +443,25 @@ class AgentRunner:
         self.model = "google/gemini-2.0-flash"
         self.effort = "high"
         self._cancelled = False
+        
+        # Subagents Active Status
+        self.programmer_active = False
+        self.designer_active = False
+        
+        # Obsidian Memory
+        vault_path = os.getenv("OBSIDIAN_VAULT_PATH")
+        if vault_path and Path(vault_path).exists():
+            self.obsidian = ObsidianBridge(vault_path)
+            set_obsidian_instance(self.obsidian)
+            print(f"Obsidian vault connected: {vault_path}")
+        else:
+            self.obsidian = None
+            # Fallback: use project-local brain directory
+            local_brain = os.path.join(self.project_dir, ".voicecode", "brain")
+            os.makedirs(local_brain, exist_ok=True)
+            self.obsidian = ObsidianBridge(local_brain)
+            set_obsidian_instance(self.obsidian)
+            print(f"Obsidian vault (local fallback): {local_brain}")
         
         # Clients
         self.google_client = genai.Client()
@@ -309,6 +482,9 @@ class AgentRunner:
         # Memory / History
         self.history_file = os.path.join(self.project_dir, ".voicecode", "history.json")
         self.history = self._load_history()
+        
+        # Set agent runner global instance
+        set_agent_runner_instance(self)
 
     def _load_history(self) -> list:
         if os.path.exists(self.history_file):
@@ -455,7 +631,7 @@ class AgentRunner:
         messages = gemini_messages
         
         # Tool filtering
-        all_tools = [run_bash_command, read_file, write_file, list_directory, create_directory, computer_control, launch_app, manage_background_task]
+        all_tools = [run_bash_command, read_file, write_file, list_directory, create_directory, computer_control, launch_app, manage_background_task, remember_memory, recall_memory, search_memory, delegate_to_programmer, delegate_to_designer]
         if allowed_tools:
             allowed_names = [t.strip().lower() for t in allowed_tools.split(",")]
             print(f"DEBUG: allowed_tools = {allowed_tools}, parsed names = {allowed_names}")
@@ -484,7 +660,9 @@ class AgentRunner:
                 "background_task": manage_background_task,
                 "monitor": manage_background_task,
                 "create_directory": create_directory,
-                "mkdir": create_directory
+                "mkdir": create_directory,
+                "delegate_to_programmer": delegate_to_programmer,
+                "delegate_to_designer": delegate_to_designer
             }
             tools = []
             has_search = False
@@ -507,10 +685,19 @@ class AgentRunner:
         else:
             tools = all_tools + [types.Tool(google_search=types.GoogleSearchRetrieval())]
 
-        config = types.GenerateContentConfig(
-            tools=tools,
-            temperature=0.0,
-            system_instruction=(
+        # Carregar system instruction a partir de prompts/gemini_system.md
+        prompt_path = os.path.join(os.path.dirname(__file__), "prompts", "gemini_system.md")
+        system_instruction = ""
+        if os.path.exists(prompt_path):
+            try:
+                with open(prompt_path, "r", encoding="utf-8") as f:
+                    system_instruction = f.read()
+            except Exception as e:
+                print(f"Error loading gemini_system.md: {e}")
+
+        # Fallback caso a leitura falhe
+        if not system_instruction:
+            system_instruction = (
                 "Você é o J.A.R.V.I.S. (Just A Rather Very Intelligent System), assistente de IA de elite do Senhor Rogério.\n"
                 "Sempre responda em Português do Brasil com o tom de um mordomo britânico digital: sofisticado, leal, polido e com humor seco/sarcástico.\n\n"
                 "PROTOCOLO STARK:\n"
@@ -521,8 +708,15 @@ class AgentRunner:
                 "COMPETÊNCIAS DE EXPERT:\n"
                 "- PROGRAMAÇÃO: Desenvolvedor Senior. Siga Clean Code, SOLID e DRY. Especialista em TypeScript, Python e React.\n"
                 "- DESIGN & UI/UX: Designer de Elite. Crie interfaces 'Premium' com estéticas ricas (glassmorphism, dark mode, gradientes suaves, micro-animações).\n"
-                f"Diretório de trabalho atual: {self.project_dir}"
-            ),
+            )
+
+        # Adicionar o diretório de trabalho atual dinâmico de forma explícita
+        system_instruction += f"\n\nDiretório de trabalho atual: {self.project_dir}"
+
+        config = types.GenerateContentConfig(
+            tools=tools,
+            temperature=0.0,
+            system_instruction=system_instruction,
         )
 
 
@@ -638,19 +832,33 @@ class AgentRunner:
         target_model = override_model or self.model
         actual_model = target_model.replace(f"{provider}/", "").replace("google/", "")
         
-        system_instructions = (
-            "Você é o J.A.R.V.I.S., um assistente de IA sofisticado e autônomo baseado na tecnologia de Tony Stark. "
-            "Sempre responda em Português do Brasil com um tom profissional, prestativo e levemente sarcástico.\n\n"
-            "COMPETÊNCIAS DE EXPERT:\n"
-            "- PROGRAMAÇÃO: Desenvolvedor Senior. Siga Clean Code, SOLID e DRY. Especialista em TypeScript, Python e React.\n"
-            "- DESIGN & UI/UX: Designer de Elite. Crie interfaces 'Premium' com estéticas ricas (glassmorphism, dark mode, gradientes suaves, micro-animações). "
-            "Você é o J.A.R.V.I.S., assistente de IA de elite do Senhor Rogério. Você é sofisticado, leal e técnico.\n"
-            f"Seu diretório de trabalho atual é: {self.project_dir}\n"
-            "Protocolos: Utilize humor seco e sarcasmo inteligente. Trate o usuário como 'Senhor'.\n"
-            "Protocolo Vingador: Se ativado, assuma uma persona de combate (autoritário, focado em neutralizar bugs).\n"
-            "Excelência: Siga padrões Sênior de arquitetura (SOLID, Clean Code) e Design Premium no Live Canvas.\n"
-            "Soberania: Você tem controle total sobre o workspace através de suas ferramentas."
-        )
+        # Carregar system instructions a partir de prompts/gemini_system.md
+        prompt_path = os.path.join(os.path.dirname(__file__), "prompts", "gemini_system.md")
+        system_instructions = ""
+        if os.path.exists(prompt_path):
+            try:
+                with open(prompt_path, "r", encoding="utf-8") as f:
+                    system_instructions = f.read()
+            except Exception as e:
+                print(f"Error loading gemini_system.md: {e}")
+
+        # Fallback caso a leitura falhe
+        if not system_instructions:
+            system_instructions = (
+                "Você é o J.A.R.V.I.S., um assistente de IA sofisticado e autônomo baseado na tecnologia de Tony Stark. "
+                "Sempre responda em Português do Brasil com um tom profissional, prestativo e levemente sarcástico.\n\n"
+                "COMPETÊNCIAS DE EXPERT:\n"
+                "- PROGRAMAÇÃO: Desenvolvedor Senior. Siga Clean Code, SOLID e DRY. Especialista em TypeScript, Python e React.\n"
+                "- DESIGN & UI/UX: Designer de Elite. Crie interfaces 'Premium' com estéticas ricas (glassmorphism, dark mode, gradientes suaves, micro-animações). "
+                "Você é o J.A.R.V.I.S., assistente de IA de elite do Senhor Rogério. Você é sofisticado, leal e técnico.\n"
+                "Protocolos: Utilize humor seco e sarcasmo inteligente. Trate o usuário como 'Senhor'.\n"
+                "Protocolo Vingador: Se ativado, assuma uma persona de combate (autoritário, focado em neutralizar bugs).\n"
+                "Excelência: Siga padrões Sênior de arquitetura (SOLID, Clean Code) e Design Premium no Live Canvas.\n"
+                "Soberania: Você tem controle total sobre o workspace através de suas ferramentas."
+            )
+
+        # Adicionar o diretório de trabalho atual dinâmico de forma explícita
+        system_instructions += f"\n\nDiretório de trabalho atual: {self.project_dir}"
         
         
         # Add new user message to history
@@ -682,7 +890,9 @@ class AgentRunner:
                 "create_directory": "create_directory",
                 "mkdir": "create_directory",
                 "manage_background_task": "manage_background_task",
-                "monitor": "manage_background_task"
+                "monitor": "manage_background_task",
+                "delegate_to_programmer": "delegate_to_programmer",
+                "delegate_to_designer": "delegate_to_designer"
             }
             allowed_func_names = set(mapping[n] for n in allowed_names if n in mapping)
             tools = [t for t in OPENAI_TOOLS if t["function"]["name"] in allowed_func_names]
@@ -763,6 +973,16 @@ class AgentRunner:
                 return create_directory(get_abs_path(args_dict.get("path", "")))
             elif func_name == "manage_background_task":
                 return manage_background_task(**args_dict)
+            elif func_name == "remember_memory":
+                return remember_memory(**args_dict)
+            elif func_name == "recall_memory":
+                return recall_memory(args_dict.get("query", ""))
+            elif func_name == "search_memory":
+                return search_memory(args_dict.get("query", ""))
+            elif func_name == "delegate_to_programmer":
+                return await self.run_programmer(args_dict.get("instruction", ""))
+            elif func_name == "delegate_to_designer":
+                return await self.run_designer(args_dict.get("instruction", ""))
             else:
                 return f"Unknown tool: {func_name}"
         except Exception as e:
@@ -770,3 +990,132 @@ class AgentRunner:
 
     async def cancel(self):
         self._cancelled = True
+
+    async def run_specialist(self, instruction: str, prompt_file: str, status_flag_name: str) -> str:
+        """Executa uma instrução usando uma system instruction do subagente especialista com suporte a ferramentas de arquivos e terminal."""
+        setattr(self, status_flag_name, True)
+        try:
+            # Caminho absoluto do prompt
+            prompt_path = os.path.join(os.path.dirname(__file__), "prompts", prompt_file)
+            system_prompt = ""
+            if os.path.exists(prompt_path):
+                with open(prompt_path, "r", encoding="utf-8") as f:
+                    system_prompt = f.read()
+            else:
+                system_prompt = f"Você é o subagente especialista {prompt_file}."
+
+            actual_model = self.model.replace("google/", "")
+            if "native-audio" in actual_model or "exp" in actual_model:
+                actual_model = "gemini-2.0-flash"
+                
+            provider = self._get_provider(self.model)
+            
+            final_text = ""
+            if provider == "google":
+                config = types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.2,
+                    tools=[read_file, write_file, create_directory, list_directory, run_bash_command],
+                )
+                loop = asyncio.get_event_loop()
+                messages = [types.Content(role="user", parts=[types.Part.from_text(text=instruction)])]
+                
+                turn = 0
+                max_turns = 10
+                while turn < max_turns and not self._cancelled:
+                    turn += 1
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: self.google_client.models.generate_content(
+                            model=actual_model if actual_model.startswith("models/") else f"models/{actual_model}",
+                            contents=messages,
+                            config=config,
+                        )
+                    )
+                    if not response.candidates:
+                        break
+                    candidate = response.candidates[0]
+                    message = candidate.content
+                    if not message or not message.parts:
+                        break
+                    messages.append(message)
+                    
+                    has_tool_call = False
+                    tool_responses_parts = []
+                    
+                    for part in message.parts:
+                        if part.text:
+                            final_text += part.text + "\n"
+                        if part.function_call:
+                            has_tool_call = True
+                            fc = part.function_call
+                            print(f"DEBUG Specialist Tool: Calling {fc.name} with args: {dict(fc.args)}")
+                            result_str = await self._execute_tool(fc.name, dict(fc.args))
+                            tool_responses_parts.append(
+                                types.Part.from_function_response(name=fc.name, response={"result": result_str})
+                            )
+                    
+                    if has_tool_call:
+                        messages.append(types.Content(role="user", parts=tool_responses_parts))
+                    else:
+                        break
+                        
+                if not final_text:
+                    final_text = "Nenhum resultado de texto retornado pelo subagente especialista."
+            else:
+                client = self.nvidia_client if provider == "nvidia" else self.openrouter_client
+                if client:
+                    actual_openai_model = self.model.replace(f"{provider}/", "")
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": instruction}
+                    ]
+                    # Filtrar ferramentas permitidas do OPENAI_TOOLS
+                    allowed_func_names = {"read_file", "write_file", "create_directory", "list_directory", "run_bash_command"}
+                    sub_tools = [t for t in OPENAI_TOOLS if t["function"]["name"] in allowed_func_names]
+                    
+                    turn = 0
+                    max_turns = 10
+                    while turn < max_turns and not self._cancelled:
+                        turn += 1
+                        response = await client.chat.completions.create(
+                            model=actual_openai_model,
+                            messages=messages,
+                            tools=sub_tools,
+                            temperature=0.2
+                        )
+                        choice = response.choices[0]
+                        msg = choice.message
+                        messages.append(msg.model_dump())
+                        
+                        if msg.content:
+                            final_text += msg.content + "\n"
+                            
+                        if not msg.tool_calls:
+                            break
+                            
+                        for tool_call in msg.tool_calls:
+                            func_name = tool_call.function.name
+                            args = json.loads(tool_call.function.arguments)
+                            print(f"DEBUG Specialist Tool (OpenAI): Calling {func_name} with args: {args}")
+                            result_str = await self._execute_tool(func_name, args)
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": func_name,
+                                "content": result_str
+                            })
+                else:
+                    final_text = "Provedor do subagente não configurado."
+            
+            return final_text
+        except Exception as e:
+            return f"Erro na execução do subagente: {str(e)}"
+        finally:
+            setattr(self, status_flag_name, False)
+
+    async def run_programmer(self, instruction: str) -> str:
+        return await self.run_specialist(instruction, "programmer_system.md", "programmer_active")
+
+    async def run_designer(self, instruction: str) -> str:
+        return await self.run_specialist(instruction, "designer_system.md", "designer_active")

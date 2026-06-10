@@ -64,6 +64,19 @@ export class UI {
   private skillsModal: HTMLElement;
   private closeSkillsBtn: HTMLElement;
 
+  // Dashboard
+  private dashboardOverlay: HTMLElement;
+  private dashboardBtn: HTMLElement;
+  private closeDashboardBtn: HTMLElement;
+  private dashboardRefreshInterval: number | null = null;
+
+  // Protocol Overlay
+  private protocolOverlay: HTMLElement;
+
+  // Task/Search counters
+  private _tasksCount = 0;
+  private _searchesCount = 0;
+
   // Filter state
   private filters: Record<string, boolean> = {};
 
@@ -95,8 +108,24 @@ export class UI {
     this.skillsModal = document.getElementById("skills-modal")!;
     this.closeSkillsBtn = document.getElementById("close-skills-btn")!;
 
+    // Dashboard elements
+    this.dashboardOverlay = document.getElementById("dashboard-overlay")!;
+    this.dashboardBtn = document.getElementById("dashboard-btn")!;
+    this.closeDashboardBtn = document.getElementById("close-dashboard-btn")!;
+
+    // Protocol overlay
+    this.protocolOverlay = document.getElementById("protocol-overlay")!;
+
     this.initSkillsModal();
+    this.initDashboard();
     this.initFilters();
+
+    // Iniciar loop periódico leve em background para sincronizar subagentes e status na tela principal
+    window.setInterval(() => {
+      if (this.voiceScreen.style.display !== "none") {
+        this.updateDashboard();
+      }
+    }, 3000);
   }
 
   private initSkillsModal(): void {
@@ -726,6 +755,210 @@ export class UI {
 
   clearTimeline(): void {
     this.timeline.innerHTML = "";
+  }
+
+  // ── Dashboard ──────────────────────────────────────────────
+
+  private initDashboard(): void {
+    if (this.dashboardBtn && this.dashboardOverlay && this.closeDashboardBtn) {
+      this.dashboardBtn.addEventListener("click", () => this.openDashboard());
+      this.closeDashboardBtn.addEventListener("click", () => this.closeDashboard());
+      this.dashboardOverlay.addEventListener("click", (e) => {
+        if (e.target === this.dashboardOverlay) this.closeDashboard();
+      });
+    }
+  }
+
+  openDashboard(): void {
+    this.dashboardOverlay.style.display = "flex";
+    this.updateDashboard();
+    // Auto-refresh every 5 seconds while open
+    this.dashboardRefreshInterval = window.setInterval(() => this.updateDashboard(), 5000);
+  }
+
+  closeDashboard(): void {
+    this.dashboardOverlay.style.display = "none";
+    if (this.dashboardRefreshInterval) {
+      clearInterval(this.dashboardRefreshInterval);
+      this.dashboardRefreshInterval = null;
+    }
+  }
+
+  async updateDashboard(): Promise<void> {
+    try {
+      const res = await fetch("/api/dashboard");
+      const data = await res.json();
+
+      // Obsidian panel
+      const obsStatus = document.getElementById("obsidian-status");
+      if (obsStatus) {
+        obsStatus.textContent = data.obsidian?.connected ? "ONLINE" : "OFFLINE";
+        obsStatus.className = `dash-status ${data.obsidian?.connected ? "online" : ""}`;
+      }
+      this.setDashValue("memory-count", data.obsidian?.memory_count ?? "—");
+      this.setDashValue("sessions-count", data.obsidian?.sessions_count ?? "—");
+      this.setDashValue("projects-count", data.obsidian?.projects_count ?? "—");
+      this.setDashValue("decisions-count", data.obsidian?.decisions_count ?? "—");
+      this.setDashValue("vault-path", data.obsidian?.vault_path ?? "Não configurado");
+
+      // Recent memories
+      const recentEl = document.getElementById("recent-memories");
+      if (recentEl && data.obsidian?.recent) {
+        recentEl.innerHTML = data.obsidian.recent.length > 0
+          ? data.obsidian.recent.map((m: any) =>
+              `<div class="dash-recent-item">📝 ${escapeHtml(m.preview || m.name)} <span style="opacity:0.4">${m.date || ""}</span></div>`
+            ).join("")
+          : `<div class="dash-recent-item" style="opacity:0.4">Nenhuma memória registrada</div>`;
+      }
+
+      // Agent panel
+      const codeStatus = document.getElementById("code-agent-status");
+      if (codeStatus) {
+        codeStatus.textContent = data.agent?.model ? "ONLINE" : "STANDBY";
+        codeStatus.className = `dash-status ${data.agent?.model ? "online" : ""}`;
+      }
+      this.setDashValue("active-model", data.agent?.model ?? "—");
+      this.setDashValue("active-provider", data.agent?.provider?.toUpperCase() ?? "—");
+      this.setDashValue("active-effort", data.agent?.effort?.toUpperCase() ?? "—");
+      this.setDashValue("tasks-count", String(this._tasksCount));
+
+      // Providers
+      const providersList = document.getElementById("providers-list");
+      if (providersList && data.providers) {
+        providersList.innerHTML = Object.entries(data.providers)
+          .map(([name, active]) =>
+            `<span class="dash-provider-tag ${active ? "active" : "inactive"}">${name.toUpperCase()}</span>`
+          ).join("");
+      }
+
+      // Search panel
+      this.setDashValue("searches-count", String(this._searchesCount));
+      this.setDashValue("obsidian-search-status", data.obsidian?.connected ? "Ativo" : "Inativo");
+
+      const searchStatus = document.getElementById("search-agent-status");
+      if (searchStatus) {
+        searchStatus.textContent = "ONLINE";
+        searchStatus.className = "dash-status online";
+      }
+
+      // Subagents Status Update
+      const progStatus = document.getElementById("subagent-programmer-status");
+      if (progStatus && data.subagents) {
+        const progActive = data.subagents.programmer === "ACTIVE";
+        progStatus.textContent = data.subagents.programmer;
+        progStatus.className = `subagent-status ${progActive ? "active" : "standby"}`;
+      }
+
+      const desStatus = document.getElementById("subagent-designer-status");
+      if (desStatus && data.subagents) {
+        const desActive = data.subagents.designer === "ACTIVE";
+        desStatus.textContent = data.subagents.designer;
+        desStatus.className = `subagent-status ${desActive ? "active" : "standby"}`;
+      }
+
+      // Sincronização dos Mini-Badges da Tela Principal
+      if (data.subagents) {
+        const progActive = data.subagents.programmer === "ACTIVE";
+        const mainProgBadge = document.getElementById("main-prog-badge");
+        const mainProgDot = document.getElementById("main-prog-dot");
+        if (mainProgBadge && mainProgDot) {
+          mainProgBadge.classList.toggle("active", progActive);
+          mainProgDot.className = `subagent-dot ${progActive ? "active" : "standby"}`;
+          const label = mainProgBadge.querySelector(".subagent-label");
+          if (label) {
+            label.textContent = `💻 PROG: ${data.subagents.programmer}`;
+          }
+        }
+
+        const desActive = data.subagents.designer === "ACTIVE";
+        const mainDesBadge = document.getElementById("main-des-badge");
+        const mainDesDot = document.getElementById("main-des-dot");
+        if (mainDesBadge && mainDesDot) {
+          mainDesBadge.classList.toggle("active", desActive);
+          mainDesDot.className = `subagent-dot ${desActive ? "active" : "standby"}`;
+          const label = mainDesBadge.querySelector(".subagent-label");
+          if (label) {
+            label.textContent = `🎨 DESIGN: ${data.subagents.designer}`;
+          }
+        }
+      }
+
+    } catch (err) {
+      console.error("Dashboard update failed:", err);
+    }
+  }
+
+  private setDashValue(id: string, value: string): void {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  }
+
+  incrementTasksCount(): void {
+    this._tasksCount++;
+    this.setDashValue("tasks-count", String(this._tasksCount));
+  }
+
+  incrementSearchesCount(): void {
+    this._searchesCount++;
+    this.setDashValue("searches-count", String(this._searchesCount));
+  }
+
+  // ── Protocol Activation ────────────────────────────────────
+
+  showProtocolActivation(protocol: string): void {
+    if (!this.protocolOverlay) return;
+
+    // Set protocol-specific text
+    const textEl = this.protocolOverlay.querySelector(".protocol-text");
+    const subEl = this.protocolOverlay.querySelector(".protocol-subtext");
+    const iconEl = this.protocolOverlay.querySelector(".protocol-icon");
+
+    if (protocol === "vingador") {
+      if (textEl) textEl.textContent = "PROTOCOLO VINGADOR";
+      if (subEl) subEl.textContent = "ONLINE";
+      if (iconEl) iconEl.textContent = "⚔️";
+    } else {
+      if (textEl) textEl.textContent = protocol.toUpperCase();
+      if (subEl) subEl.textContent = "ATIVADO";
+    }
+
+    this.protocolOverlay.style.display = "flex";
+    this.protocolOverlay.classList.add("active");
+
+    // Remove after animation completes (~3.3s)
+    setTimeout(() => {
+      this.protocolOverlay.style.display = "none";
+      this.protocolOverlay.classList.remove("active");
+    }, 3300);
+  }
+
+  // ── Wake Word Visual ───────────────────────────────────────
+
+  showStandby(): void {
+    const voicePanel = document.getElementById("voice-panel");
+    if (voicePanel) {
+      voicePanel.classList.add("standby-mode");
+      voicePanel.classList.remove("wake-active");
+    }
+    const hint = document.getElementById("mic-hint");
+    if (hint) hint.textContent = 'Aguardando "Jarvis"...';
+  }
+
+  showWakeActive(): void {
+    const voicePanel = document.getElementById("voice-panel");
+    if (voicePanel) {
+      voicePanel.classList.remove("standby-mode");
+      voicePanel.classList.add("wake-active");
+    }
+    const hint = document.getElementById("mic-hint");
+    if (hint) hint.textContent = "Ouvindo comando...";
+  }
+
+  clearWakeState(): void {
+    const voicePanel = document.getElementById("voice-panel");
+    if (voicePanel) {
+      voicePanel.classList.remove("standby-mode", "wake-active");
+    }
   }
 }
 

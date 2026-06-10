@@ -20,6 +20,8 @@ export interface GeminiCallbacks {
   onConnected: () => void;
   onDisconnected: () => void;
   onStateChange: (state: "idle" | "thinking" | "speaking" | "listening") => void;
+  onWakeWordDetected?: () => void;
+  onStandbyMode?: () => void;
 }
 
 export class GeminiConnection {
@@ -30,6 +32,11 @@ export class GeminiConnection {
   private reconnecting = false;
   private intentionallyClosed = false;
   private isAlwaysOn = false;
+  private awake = false;
+  private wakeWordEnabled = false;
+  private wakeTimeout: any = null;
+  private readonly WAKE_TIMEOUT_MS = 5000; // 5 segundos de conversa fluente
+  private currentState: "idle" | "thinking" | "speaking" | "listening" = "idle";
 
   private languageCode: string;
 
@@ -42,6 +49,7 @@ export class GeminiConnection {
   async connect(): Promise<void> {
     this.intentionallyClosed = false;
     this.reconnecting = false;
+    this.cancelWakeTimeout();
 
     try {
       // Fetch ephemeral token and config from backend
@@ -66,6 +74,11 @@ export class GeminiConnection {
 
       // Determine if we are in always-on mode
       this.isAlwaysOn = this.audioManager.getMode() === "always-on";
+      this.wakeWordEnabled = this.isAlwaysOn;
+      if (this.wakeWordEnabled) {
+        this.awake = false;
+        setTimeout(() => this.callbacks.onStandbyMode?.(), 500);
+      }
 
       // Wire up audio capture — in always-on mode audio flows continuously
       // and Gemini uses AUTOMATIC activity detection (no manual VAD signals)
@@ -85,6 +98,14 @@ export class GeminiConnection {
 
       this.audioManager.setOnChunk((base64) => {
         this.sendAudio(base64);
+      });
+
+      this.audioManager.setOnPlaybackEnded(() => {
+        if (this.wakeWordEnabled && this.awake) {
+          log("WAKEWORD", "J.A.R.V.I.S. terminou de falar. Mudando para idle e iniciando janela de 5s de escuta.");
+          this.setConnectionState("idle");
+          this.startWakeTimeout();
+        }
       });
 
 
@@ -187,14 +208,18 @@ export class GeminiConnection {
 
     // Model turn parts — audio, thought, text
     if (message.serverContent?.modelTurn?.parts) {
+      if (this.wakeWordEnabled && !this.awake) {
+        return;
+      }
+      this.cancelWakeTimeout();
       for (const part of message.serverContent.modelTurn.parts) {
         // Audio data — from inlineData (NOT message.data which crashes on thought messages)
         if (part.inlineData?.data) {
-          this.callbacks.onStateChange("speaking");
+          this.setConnectionState("speaking");
           this.audioManager.queuePlayback(part.inlineData.data);
         } else if (part.thought) {
           // Thought = internal reasoning
-          this.callbacks.onStateChange("thinking");
+          this.setConnectionState("thinking");
           if (part.text) {
             this.callbacks.onThinking(part.text);
           }
@@ -207,14 +232,28 @@ export class GeminiConnection {
 
     // Input transcription — show as draft, will be replaced by accurate STT
     if (message.serverContent?.inputTranscription?.text) {
-      this.callbacks.onTranscript(
-        "user",
-        message.serverContent.inputTranscription.text
-      );
+      const text = message.serverContent.inputTranscription.text;
+      if (this.wakeWordEnabled && !this.awake) {
+        const transcript = text.toLowerCase();
+        if (transcript.includes("jarvis")) {
+          this.awake = true;
+          log("WAKEWORD", "Wake word 'Jarvis' detected!");
+          this.callbacks.onWakeWordDetected?.();
+          const cleanText = text.replace(/^[Jj]arvis[,\s]*/i, "");
+          this.callbacks.onTranscript("user", cleanText || "Jarvis");
+        } else {
+          return;
+        }
+      } else {
+        this.cancelWakeTimeout();
+        this.callbacks.onTranscript("user", text);
+      }
     }
 
     // Output audio transcription (what Gemini said)
     if (message.serverContent?.outputTranscription?.text) {
+      if (this.wakeWordEnabled && !this.awake) return;
+      this.cancelWakeTimeout();
       this.callbacks.onTranscript(
         "gemini",
         message.serverContent.outputTranscription.text
@@ -226,17 +265,29 @@ export class GeminiConnection {
       log("GEMINI", "Interrupted by user");
       this.audioManager.clearPlayback();
       this.callbacks.onInterrupted();
-      this.callbacks.onStateChange("idle");
+      this.setConnectionState("idle");
+      this.cancelWakeTimeout();
     }
 
     // Turn complete — back to idle, end transcript accumulation
     if (message.serverContent?.turnComplete) {
-      this.callbacks.onStateChange("idle");
       this.callbacks.onTurnComplete();
+      if (this.wakeWordEnabled) {
+        if (this.audioManager.isSpeaking()) {
+          log("WAKEWORD", "TurnComplete recebido, mas J.A.R.V.I.S. ainda está falando. Mantendo estado 'speaking'.");
+        } else {
+          this.setConnectionState("idle");
+          this.startWakeTimeout();
+        }
+      } else {
+        this.setConnectionState("idle");
+      }
     }
 
     // Function calls — forward to backend
     if (message.toolCall?.functionCalls) {
+      if (this.wakeWordEnabled && !this.awake) return;
+      this.cancelWakeTimeout();
       for (const call of message.toolCall.functionCalls) {
         log("GEMINI", `Function call: ${call.name}`, call.args);
         this.callbacks.onFunctionCall(call.id, call.name, call.args || {});
@@ -251,6 +302,24 @@ export class GeminiConnection {
       log("AUDIO_SEND", "No session, skipping");
       return;
     }
+
+    const rms = getAudioVolumeRMS(base64Pcm);
+
+    if (this.wakeWordEnabled && this.awake) {
+      if (this.audioManager.isSpeaking() || this.currentState === "speaking") {
+        // J.A.R.V.I.S. está falando: cancela o standby para não desativar no meio da fala dele
+        this.cancelWakeTimeout();
+      } else if (rms > 500) {
+        // Usuário está falando: cancela o timeout de inatividade para mantê-lo ouvindo
+        this.cancelWakeTimeout();
+      } else {
+        // Usuário está em silêncio: se o timer não estiver rodando e o Gemini estiver em escuta/ocioso
+        if (this.wakeTimeout === null && (this.currentState === "idle" || this.currentState === "listening")) {
+          this.startWakeTimeout();
+        }
+      }
+    }
+
     try {
       this.session.sendRealtimeInput({
         audio: {
@@ -260,7 +329,7 @@ export class GeminiConnection {
       });
       this.audioSendCount++;
       if (this.audioSendCount % 50 === 1) {
-        log("AUDIO_SEND", `Sent chunk #${this.audioSendCount} to Gemini (${base64Pcm.length} chars)`);
+        log("AUDIO_SEND", `Sent chunk #${this.audioSendCount} to Gemini (${base64Pcm.length} chars) | RMS=${rms.toFixed(1)}`);
       }
     } catch (err) {
       log("AUDIO_SEND", `ERROR sending audio: ${err}`);
@@ -370,6 +439,7 @@ export class GeminiConnection {
   async disconnect(): Promise<void> {
     this.intentionallyClosed = true;
     this.reconnecting = true; // Prevent auto-reconnect
+    this.cancelWakeTimeout();
     if (this.session) {
       try {
         this.session.close();
@@ -378,5 +448,54 @@ export class GeminiConnection {
       }
       this.session = null;
     }
+  }
+
+  private startWakeTimeout(): void {
+    this.cancelWakeTimeout();
+    if (!this.wakeWordEnabled) return;
+
+    if (this.audioManager.isSpeaking() || this.currentState === "speaking") {
+      log("WAKEWORD", "startWakeTimeout cancelado pois J.A.R.V.I.S. está falando.");
+      return;
+    }
+
+    log("WAKEWORD", `Agendando standby em ${this.WAKE_TIMEOUT_MS / 1000}s`);
+    this.wakeTimeout = setTimeout(() => {
+      this.awake = false;
+      this.callbacks.onStandbyMode?.();
+      log("WAKEWORD", "Standby ativado devido a inatividade");
+    }, this.WAKE_TIMEOUT_MS) as any;
+  }
+
+  private cancelWakeTimeout(): void {
+    if (this.wakeTimeout) {
+      clearTimeout(this.wakeTimeout);
+      this.wakeTimeout = null;
+    }
+  }
+
+  private setConnectionState(state: "idle" | "thinking" | "speaking" | "listening"): void {
+    this.currentState = state;
+    this.callbacks.onStateChange(state);
+  }
+}
+
+/** Calcula a energia RMS do chunk de áudio PCM de 16-bit em base64. */
+function getAudioVolumeRMS(base64: string): number {
+  try {
+    const binary = atob(base64);
+    const len = binary.length;
+    let sum = 0;
+    const numSamples = len / 2;
+    if (numSamples === 0) return 0;
+    
+    for (let i = 0; i < len; i += 2) {
+      let sample = binary.charCodeAt(i) | (binary.charCodeAt(i + 1) << 8);
+      if (sample >= 32768) sample -= 65536;
+      sum += sample * sample;
+    }
+    return Math.sqrt(sum / numSamples);
+  } catch {
+    return 0;
   }
 }

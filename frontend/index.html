@@ -48,6 +48,7 @@
             <button id="change-project-btn" title="Change project">Change</button>
           </div>
           <div id="controls">
+            <button id="dashboard-btn" title="J.A.R.V.I.S. Command Center">Dashboard</button>
             <button id="skills-btn" title="Active Protocols (Skills)">Protocols</button>
             <button id="new-chat-btn" title="Clear Gemini context and start fresh">New Chat</button>
             <select id="language-select" title="Speech language">
@@ -82,8 +83,20 @@
           <!-- Left panel: Voice -->
           <section id="voice-panel">
             <div id="status-bar">
-              <span id="connection-status" class="status-dot disconnected"></span>
-              <span id="status-text">Disconnected</span>
+              <div class="status-left">
+                <span id="connection-status" class="status-dot disconnected"></span>
+                <span id="status-text">Disconnected</span>
+              </div>
+              <div class="status-subagents">
+                <div class="main-subagent-badge" id="main-prog-badge" title="Programador Sênior Fullstack">
+                  <span class="subagent-dot standby" id="main-prog-dot"></span>
+                  <span class="subagent-label">💻 PROG: STANDBY</span>
+                </div>
+                <div class="main-subagent-badge" id="main-des-badge" title="Designer Gráfico & UX HUD Sênior">
+                  <span class="subagent-dot standby" id="main-des-dot"></span>
+                  <span class="subagent-label">🎨 DESIGN: STANDBY</span>
+                </div>
+              </div>
             </div>
 
             <div id="mic-area">
@@ -165,6 +178,96 @@
             <li><span class="skill-icon">🎨</span> <span class="skill-name">Live Canvas Rendering</span> <span class="skill-status active">ONLINE</span></li>
           </ul>
         </div>
+      </div>
+    </div>
+
+    <!-- Dashboard Overlay -->
+    <div id="dashboard-overlay" class="dashboard-overlay" style="display: none;">
+      <div class="dashboard-container">
+        <div class="dashboard-header">
+          <h2><span class="jarvis-logo">J.A.R.V.I.S.</span> <span class="dash-subtitle">Command Center</span></h2>
+          <button id="close-dashboard-btn">&times;</button>
+        </div>
+
+        <div class="dashboard-grid">
+          <!-- Painel 1: Obsidian / Cérebro -->
+          <div class="dash-card brain-card">
+            <div class="dash-card-header">
+              <span class="dash-icon">🧠</span>
+              <h3>Cérebro Principal</h3>
+              <span class="dash-status" id="obsidian-status">OFFLINE</span>
+            </div>
+            <div class="dash-card-body" id="obsidian-panel">
+              <div class="dash-stat"><span class="stat-label">Memórias</span><span class="stat-value" id="memory-count">—</span></div>
+              <div class="dash-stat"><span class="stat-label">Sessões</span><span class="stat-value" id="sessions-count">—</span></div>
+              <div class="dash-stat"><span class="stat-label">Projetos</span><span class="stat-value" id="projects-count">—</span></div>
+              <div class="dash-stat"><span class="stat-label">Decisões</span><span class="stat-value" id="decisions-count">—</span></div>
+              <div class="dash-stat"><span class="stat-label">Vault</span><span class="stat-value dash-vault-path" id="vault-path">—</span></div>
+              <div class="dash-section-title">Memórias Recentes</div>
+              <div class="dash-recent" id="recent-memories"></div>
+            </div>
+          </div>
+
+          <!-- Painel 2: Agentes de Código -->
+          <div class="dash-card code-card">
+            <div class="dash-card-header">
+              <span class="dash-icon">⚡</span>
+              <h3>Agentes de Código</h3>
+              <span class="dash-status" id="code-agent-status">STANDBY</span>
+            </div>
+            <div class="dash-card-body" id="code-agent-panel">
+              <div class="dash-stat"><span class="stat-label">Modelo Ativo</span><span class="stat-value" id="active-model">—</span></div>
+              <div class="dash-stat"><span class="stat-label">Provider</span><span class="stat-value" id="active-provider">—</span></div>
+              <div class="dash-stat"><span class="stat-label">Esforço</span><span class="stat-value" id="active-effort">—</span></div>
+              <div class="dash-stat"><span class="stat-label">Tarefas na Sessão</span><span class="stat-value" id="tasks-count">0</span></div>
+              <div class="dash-section-title">Providers</div>
+              <div class="dash-providers" id="providers-list"></div>
+              <div class="dash-section-title">Subagentes do J.A.R.V.I.S.</div>
+              <div class="dash-subagents-list">
+                <div class="dash-subagent-row">
+                  <span class="subagent-name">💻 Programador Sênior Fullstack</span>
+                  <span class="subagent-status standby" id="subagent-programmer-status">STANDBY</span>
+                </div>
+                <div class="dash-subagent-row">
+                  <span class="subagent-name">🎨 Designer Gráfico & UX HUD</span>
+                  <span class="subagent-status standby" id="subagent-designer-status">STANDBY</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Painel 3: Agentes de Busca -->
+          <div class="dash-card search-card">
+            <div class="dash-card-header">
+              <span class="dash-icon">🔍</span>
+              <h3>Agentes de Busca</h3>
+              <span class="dash-status" id="search-agent-status">ONLINE</span>
+            </div>
+            <div class="dash-card-body" id="search-agent-panel">
+              <div class="dash-stat"><span class="stat-label">Google Search</span><span class="stat-value">Integrado</span></div>
+              <div class="dash-stat"><span class="stat-label">Grep/Glob Local</span><span class="stat-value">Ativo</span></div>
+              <div class="dash-stat"><span class="stat-label">Obsidian Search</span><span class="stat-value" id="obsidian-search-status">—</span></div>
+              <div class="dash-stat"><span class="stat-label">Buscas na Sessão</span><span class="stat-value" id="searches-count">0</span></div>
+              <div class="dash-section-title">Capacidades</div>
+              <div class="dash-capabilities">
+                <span class="dash-cap-tag">File System</span>
+                <span class="dash-cap-tag">Terminal</span>
+                <span class="dash-cap-tag">Web Search</span>
+                <span class="dash-cap-tag">Memory Vault</span>
+                <span class="dash-cap-tag">Desktop Control</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Protocol Activation Overlay -->
+    <div id="protocol-overlay" class="protocol-overlay" style="display: none;">
+      <div class="protocol-content">
+        <div class="protocol-icon">⚔️</div>
+        <div class="protocol-text">PROTOCOLO VINGADOR</div>
+        <div class="protocol-subtext">ONLINE</div>
       </div>
     </div>
 

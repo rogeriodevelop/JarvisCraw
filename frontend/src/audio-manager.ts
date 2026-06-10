@@ -35,6 +35,7 @@ export class AudioManager {
   private playbackQueueProcessing = false;
   private playbackQueue: Float32Array[] = [];
   private activePlaybackSources: AudioBufferSourceNode[] = [];
+  private onPlaybackEndedCallback: (() => void) | null = null;
 
   // Wake word
   private wakeWordRecognizer: any = null;
@@ -453,6 +454,9 @@ export class AudioManager {
       source.onended = () => {
         const idx = this.activePlaybackSources.indexOf(source);
         if (idx !== -1) this.activePlaybackSources.splice(idx, 1);
+        if (this.activePlaybackSources.length === 0 && this.onPlaybackEndedCallback) {
+          this.onPlaybackEndedCallback();
+        }
       };
     }
 
@@ -480,6 +484,14 @@ export class AudioManager {
     chunksPlayed = 0;
 
     log("AUDIO_OUT", "Playback cleared (interrupted)");
+  }
+
+  isSpeaking(): boolean {
+    return this.activePlaybackSources.length > 0;
+  }
+
+  setOnPlaybackEnded(callback: () => void): void {
+    this.onPlaybackEndedCallback = callback;
   }
 
   getInputAnalyser(): AnalyserNode | null {

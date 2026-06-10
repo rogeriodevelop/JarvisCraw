@@ -30,6 +30,73 @@ let nvidiaApi: NvidiaApiService | null = null;
 let isConnected = false;
 let pendingImages: { mimeType: string; data: string }[] = [];
 
+// Avenger Protocol Audio state
+let protocolAudio: HTMLAudioElement | null = null;
+let fadeTimeout: number | null = null;
+let fadeInterval: number | null = null;
+
+function playProtocolMusic(src: string): void {
+  if (protocolAudio) {
+    protocolAudio.pause();
+    protocolAudio = null;
+  }
+  if (fadeTimeout) {
+    clearTimeout(fadeTimeout);
+    fadeTimeout = null;
+  }
+  if (fadeInterval) {
+    clearInterval(fadeInterval);
+    fadeInterval = null;
+  }
+
+  protocolAudio = new Audio(src);
+  protocolAudio.volume = 0.4;
+  protocolAudio.play().catch(err => log("AUDIO", `Music playback failed: ${err}`));
+
+  // Fade out após 15 segundos
+  fadeTimeout = window.setTimeout(() => {
+    if (protocolAudio) {
+      fadeInterval = window.setInterval(() => {
+        if (protocolAudio && protocolAudio.volume > 0.05) {
+          protocolAudio.volume = Math.max(0, protocolAudio.volume - 0.05);
+        } else {
+          if (fadeInterval) {
+            clearInterval(fadeInterval);
+            fadeInterval = null;
+          }
+          protocolAudio?.pause();
+          protocolAudio = null;
+        }
+      }, 200);
+    }
+  }, 15000);
+}
+
+function stopProtocolMusic(): void {
+  if (fadeTimeout) {
+    clearTimeout(fadeTimeout);
+    fadeTimeout = null;
+  }
+  if (fadeInterval) {
+    clearInterval(fadeInterval);
+    fadeInterval = null;
+  }
+  if (protocolAudio) {
+    fadeInterval = window.setInterval(() => {
+      if (protocolAudio && protocolAudio.volume > 0.05) {
+        protocolAudio.volume = Math.max(0, protocolAudio.volume - 0.1);
+      } else {
+        if (fadeInterval) {
+          clearInterval(fadeInterval);
+          fadeInterval = null;
+        }
+        protocolAudio?.pause();
+        protocolAudio = null;
+      }
+    }, 100);
+  }
+}
+
 // ── Project Picker ───────────────────────────────────────────
 
 async function openProject(path: string): Promise<boolean> {
@@ -111,6 +178,12 @@ async function initVoiceUI(): Promise<void> {
           ui.addActivityEvent(e);
           agentActivityLog.push(`[${e.tool}] ${detail}`);
           narration?.sendEvent(`Agent used ${e.tool}${detail ? ` on ${detail}` : ""}`);
+          
+          // Incrementar contadores do Dashboard
+          ui.incrementTasksCount();
+          if (["Glob", "Grep", "recall_memory", "search_memory"].includes(e.tool)) {
+            ui.incrementSearchesCount();
+          }
         } else if (e.subtype === "thinking") {
           log("AGENT", `thinking: ${e.text.slice(0, 100)}`);
           ui.addAgentThinking(e.text);
@@ -266,14 +339,23 @@ async function connectGemini(): Promise<void> {
         if (lower.includes("protocolo vingador")) {
           document.body.classList.add("vingador");
           log("PROTOCOL", "AVENGER PROTOCOL ACTIVATED");
+          ui.showProtocolActivation("vingador");
+          playProtocolMusic("/audio/back_in_black.mp3");
         } else if (lower.includes("descansar") || lower.includes("protocolo padrão") || lower.includes("protocolo jarvis")) {
           document.body.classList.remove("vingador");
           log("PROTOCOL", "STAND DOWN - DEFAULT PROTOCOLS RESTORED");
+          stopProtocolMusic();
         }
       }
     },
     onTurnComplete: () => {
       ui.endTranscript();
+    },
+    onWakeWordDetected: () => {
+      ui.showWakeActive();
+    },
+    onStandbyMode: () => {
+      ui.showStandby();
     },
     onInterrupted: () => {
       ui.endTranscript();

@@ -268,6 +268,79 @@ export const functionDeclarations: FunctionDeclaration[] = [
       },
     },
   },
+  {
+    name: "remember_memory",
+    description:
+      "Save a memory or note to the J.A.R.V.I.S. brain (Obsidian vault) for long-term persistent recall. Use to remember decisions, learnings, important context, or anything the user wants to keep. The Senhor may say 'lembre disso', 'anote isso', 'memorize'.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "The information to remember (Markdown supported)" },
+        category: {
+          type: "string",
+          description: "Category: 'session', 'project', 'decision', or 'general'",
+          enum: ["session", "project", "decision", "general"],
+        },
+        tags: { type: "string", description: "Comma-separated tags" },
+        project: { type: "string", description: "Project name to link" },
+      },
+      required: ["content"],
+    },
+  },
+  {
+    name: "recall_memory",
+    description:
+      "Search and recall memories from the J.A.R.V.I.S. brain (Obsidian vault). Use when the user asks 'o que decidimos sobre...', 'você lembra de...', 'qual era aquele...'.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query to find relevant memories" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "search_memory",
+    description:
+      "Broad search across all memories in the J.A.R.V.I.S. brain. Returns more results. Use for comprehensive lookups.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search term" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "delegate_to_programmer",
+    description:
+      "Delega uma instrução de desenvolvimento de software fullstack complexa para o subagente especialista em programação sênior. Retorna a solução robusta e completa gravada em arquivos.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        instruction: {
+          type: "string",
+          description: "A instrução ou tarefa detalhada de programação para o especialista.",
+        },
+      },
+      required: ["instruction"],
+    },
+  },
+  {
+    name: "delegate_to_designer",
+    description:
+      "Delega uma instrução de criação de interface, design gráfico, estilo visual contemporâneo ou UX para o subagente especialista em design. Retorna a interface ou design completo gravado em arquivos.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        instruction: {
+          type: "string",
+          description: "A instrução detalhada de criação de design e UX para o especialista.",
+        },
+      },
+      required: ["instruction"],
+    },
+  },
 ];
 
 // ── WebSocket Messages (Browser ↔ Backend) ───────────────────

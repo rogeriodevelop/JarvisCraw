@@ -195,6 +195,34 @@ class FunctionRouter:
                 "is_error": False
             }
 
+        elif name == "delegate_to_programmer":
+            instruction = args.get("instruction", "")
+            yield {
+                "type": "agent_event",
+                "subtype": "thinking",
+                "text": f"Delegando tarefa ao Programador Sênior Fullstack...\nInstrução: {instruction}"
+            }
+            res = await self.agent.run_programmer(instruction)
+            yield {
+                "type": "function_result",
+                "result": res,
+                "is_error": False
+            }
+
+        elif name == "delegate_to_designer":
+            instruction = args.get("instruction", "")
+            yield {
+                "type": "agent_event",
+                "subtype": "thinking",
+                "text": f"Delegando tarefa ao Designer Gráfico & UX HUD...\nInstrução: {instruction}"
+            }
+            res = await self.agent.run_designer(instruction)
+            yield {
+                "type": "function_result",
+                "result": res,
+                "is_error": False
+            }
+
         else:
             yield {
                 "type": "function_result",

@@ -91,11 +91,18 @@ async def browse_dirs(path: str = "~"):
 
     dirs = []
     try:
-        for d in sorted(resolved.iterdir(), key=lambda x: x.name.lower()):
-            if d.is_dir() and not d.name.startswith("."):
-                dirs.append({"name": d.name, "path": str(d)})
-    except PermissionError:
-        pass
+        items = []
+        for item in resolved.iterdir():
+            try:
+                if item.is_dir() and not item.name.startswith("."):
+                    items.append(item)
+            except Exception:
+                continue
+        
+        for d in sorted(items, key=lambda x: x.name.lower()):
+            dirs.append({"name": d.name, "path": str(d)})
+    except Exception as e:
+        print(f"Erro ao listar pastas em {resolved}: {e}")
 
     return {
         "current": str(resolved),
@@ -271,6 +278,63 @@ async def restore_checkpoint(request: Request):
 @app.get("/api/context")
 async def get_context():
     return {"summary": context_bridge.get_summary()}
+
+
+@app.get("/api/dashboard")
+async def get_dashboard():
+    """Aggregated dashboard data for all panels."""
+    obsidian_data = {"connected": False, "vault_path": None, "memory_count": 0, "recent": []}
+    if agent_runner and agent_runner.obsidian:
+        try:
+            status = agent_runner.obsidian.get_status()
+            obsidian_data = {
+                "connected": True,
+                "vault_path": str(agent_runner.obsidian.vault_path),
+                "memory_count": status.get("memory_count", 0),
+                "sessions_count": status.get("sessions_count", 0),
+                "projects_count": status.get("projects_count", 0),
+                "decisions_count": status.get("decisions_count", 0),
+                "recent": agent_runner.obsidian.list_memories(limit=5),
+            }
+        except Exception as e:
+            obsidian_data["error"] = str(e)
+
+    agent_data = {
+        "model": agent_runner.model if agent_runner else None,
+        "effort": agent_runner.effort if agent_runner else None,
+        "provider": agent_runner._get_provider(agent_runner.model) if agent_runner else None,
+    }
+
+    providers = {
+        "google": bool(os.getenv("GEMINI_API_KEY")),
+        "nvidia": bool(os.getenv("NVIDIA_API_KEY")),
+        "openrouter": bool(os.getenv("OPENROUTER_API_KEY")),
+    }
+
+    subagents = {
+        "programmer": "ACTIVE" if (agent_runner and agent_runner.programmer_active) else "STANDBY",
+        "designer": "ACTIVE" if (agent_runner and agent_runner.designer_active) else "STANDBY",
+    }
+
+    return {"obsidian": obsidian_data, "agent": agent_data, "providers": providers, "subagents": subagents}
+
+
+@app.get("/api/obsidian/status")
+async def obsidian_status():
+    """Get Obsidian vault connection status."""
+    if agent_runner and agent_runner.obsidian:
+        return agent_runner.obsidian.get_status()
+    return {"connected": False, "vault_path": None, "memory_count": 0}
+
+
+@app.get("/api/obsidian/search")
+async def obsidian_search(q: str = ""):
+    """Search the Obsidian vault."""
+    if not q:
+        return {"results": "Nenhuma query fornecida."}
+    if agent_runner and agent_runner.obsidian:
+        return {"results": agent_runner.obsidian.recall(q)}
+    return {"results": "Obsidian vault não conectado."}
 
 
 # ── WebSocket ─────────────────────────────────────────────────
