@@ -13,7 +13,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from checkpoint import GitCheckpoint, SessionManager
-from agent_runner import AgentRunner
+from agent_runner import AgentRunner, get_router
+from model_router import normalize_model_id
 from context_bridge import ContextBridge
 from function_router import FunctionRouter
 from gemini_session import create_ephemeral_token
@@ -32,6 +33,45 @@ session_manager: SessionManager | None = None
 git_checkpoint: GitCheckpoint | None = None
 
 
+# ── Preferências globais (último projeto, recentes, modelos) ──
+
+STATE_FILE = Path(__file__).parent / "jarvis_state.json"
+DEFAULT_WORKSPACE = Path(os.getenv("JARVIS_DEFAULT_PROJECT") or (Path(__file__).parent.parent / "jarvis-workspace"))
+
+VOICE_MODELS = [
+    {"id": "models/gemini-3.1-flash-live-preview", "label": "Gemini 3.1 Flash Live"},
+    {"id": "models/gemini-2.5-flash-native-audio-latest", "label": "Gemini 2.5 Flash (áudio nativo)"},
+    {"id": "models/gemini-3.8-live", "label": "Gemini 3.8 Live"},
+]
+DEFAULT_STATE = {
+    "last_project": None,
+    "recent_projects": [],
+    "agent_model": "auto",
+    "agent_effort": "high",
+    "voice_model": VOICE_MODELS[0]["id"],
+}
+
+
+def load_state() -> dict:
+    state = dict(DEFAULT_STATE)
+    try:
+        if STATE_FILE.exists():
+            state.update(json.loads(STATE_FILE.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"Aviso: não foi possível ler {STATE_FILE.name}: {e}")
+    return state
+
+
+def save_state():
+    try:
+        STATE_FILE.write_text(json.dumps(app_state, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError as e:
+        print(f"Aviso: não foi possível gravar {STATE_FILE.name}: {e}")
+
+
+app_state = load_state()
+
+
 def set_project(path: str):
     """Initialize all components for a project directory."""
     global project_dir, agent_runner, function_router, session_manager, git_checkpoint
@@ -45,15 +85,27 @@ def set_project(path: str):
     # Restore agent session ID if available
     if session_manager.agent_session_id:
         agent_runner.session_id = session_manager.agent_session_id
-    
-    # Restore agent model and effort if saved
-    if session_manager.agent_model:
-        agent_runner.model = session_manager.agent_model
-        print(f"DEBUG: Restored agent model: {agent_runner.model}")
-    if session_manager.agent_effort:
-        agent_runner.effort = session_manager.agent_effort
+
+    # Modelo e esforço vêm das preferências globais
+    agent_runner.model = app_state.get("agent_model") or "auto"
+    agent_runner.effort = app_state.get("agent_effort") or "high"
+
+    recent = [p for p in app_state.get("recent_projects", []) if p != path]
+    app_state["recent_projects"] = [path] + recent[:7]
+    app_state["last_project"] = path
+    save_state()
 
     print(f"Project set: {project_dir}")
+
+
+def open_default_project():
+    """Abre o último projeto usado; na primeira vez, cria e abre a pasta de trabalho padrão."""
+    last = app_state.get("last_project")
+    if last and Path(last).is_dir():
+        set_project(last)
+        return
+    DEFAULT_WORKSPACE.mkdir(parents=True, exist_ok=True)
+    set_project(str(DEFAULT_WORKSPACE.resolve()))
 
 
 # ── REST Endpoints ────────────────────────────────────────────
@@ -67,6 +119,15 @@ async def health():
 @app.get("/api/project")
 async def get_project():
     return {"path": project_dir, "active": project_dir is not None}
+
+
+@app.get("/api/projects/recent")
+async def recent_projects():
+    return {
+        "current": project_dir,
+        "recent": [p for p in app_state.get("recent_projects", []) if Path(p).is_dir()],
+        "default": str(DEFAULT_WORKSPACE),
+    }
 
 
 @app.post("/api/project")
@@ -141,43 +202,32 @@ async def get_config():
         system_prompt = prompt_path.read_text(encoding="utf-8")
     return {
         "system_prompt": system_prompt,
-        "model": "models/gemini-3.1-flash-live-preview",
-        "nvidia_api_key": os.getenv("NVIDIA_API_KEY"),
-        "openrouter_api_key": os.getenv("OPENROUTER_API_KEY"),
+        "model": app_state.get("voice_model") or VOICE_MODELS[0]["id"],
     }
 
 
 @app.get("/api/models")
 async def list_available_models():
-    """List available models from all providers"""
-    google_models = [
-        {"id": "models/gemini-2.5-flash-native-audio-latest", "name": "Gemini 2.5 Flash Live (Voz + Tools)", "provider": "google"},
-        {"id": "models/gemini-3.1-flash-live-preview", "name": "Gemini 3.1 Flash Live (Novo)", "provider": "google"},
-        {"id": "models/gemini-2.0-flash", "name": "Gemini 2.0 Flash (Texto Only)", "provider": "google"},
-        {"id": "models/gemini-1.5-flash", "name": "Gemini 1.5 Flash (Estável)", "provider": "google"},
-    ]
+    """Modelos do agente (catálogo do roteador) e modelos de voz."""
+    router = get_router()
+    agent_models = [{"id": "auto", "label": "Automático (roteamento)", "provider": "auto", "tier": None}]
+    agent_models += [{"id": m.id, "label": m.label, "provider": m.provider, "tier": m.tier} for m in router.models()]
+    return {
+        "agent": agent_models,
+        "voice": VOICE_MODELS,
+        "tiers": {"rapido": "Rápido", "padrao": "Padrão", "forte": "Forte"},
+        "current": {
+            "agent_model": app_state.get("agent_model", "auto"),
+            "agent_effort": app_state.get("agent_effort", "high"),
+            "voice_model": app_state.get("voice_model"),
+        },
+    }
 
-    nvidia_models = []
-    nv_key = os.getenv("NVIDIA_API_KEY")
-    if nv_key:
-        nvidia_models = [
-            {"id": "nvidia/meta/llama-3.3-70b-instruct", "name": "Llama 3.3 70B (NVIDIA)", "provider": "nvidia"},
-            {"id": "nvidia/meta/llama-3.1-70b-instruct", "name": "Llama 3.1 70B (NVIDIA)", "provider": "nvidia"},
-            {"id": "nvidia/deepseek-ai/deepseek-v4-pro", "name": "DeepSeek V4 Pro (NVIDIA)", "provider": "nvidia"},
-            {"id": "nvidia/nvidia/llama-3.1-nemotron-70b-instruct", "name": "Nemotron 70B (NVIDIA)", "provider": "nvidia"},
-        ]
 
-    openrouter_models = []
-    or_key = os.getenv("OPENROUTER_API_KEY")
-    if or_key:
-        openrouter_models = [
-            {"id": "openrouter/anthropic/claude-3.5-sonnet", "name": "Claude 3.5 Sonnet (OpenRouter)", "provider": "openrouter"},
-            {"id": "openrouter/openai/gpt-4o", "name": "GPT-4o (OpenRouter)", "provider": "openrouter"},
-            {"id": "openrouter/deepseek/deepseek-chat", "name": "DeepSeek V3 (OpenRouter)", "provider": "openrouter"},
-            {"id": "openrouter/google/gemini-2.0-flash-001", "name": "Gemini 2.0 Flash (OpenRouter)", "provider": "openrouter"},
-        ]
-
-    return {"models": google_models + nvidia_models + openrouter_models}
+@app.get("/api/routing")
+async def routing_status():
+    """Saúde de cada modelo e última escolha do roteador."""
+    return get_router().snapshot()
 
 
 @app.get("/api/narration-config")
@@ -228,30 +278,35 @@ async def transcribe(request: Request):
 
 @app.post("/api/agent-config")
 async def set_agent_config(request: Request):
-    if not agent_runner:
-        return JSONResponse({"error": "No project selected"}, status_code=400)
-
     data = await request.json()
-    model = data.get("model", "").strip()
-    effort = data.get("effort", "").strip()
+    model = (data.get("model") or "").strip()
+    effort = (data.get("effort") or "").strip()
+    voice_model = (data.get("voice_model") or "").strip()
 
     if model:
-        agent_runner.model = model
-        if session_manager:
-            session_manager.agent_model = model
-    if effort:
-        agent_runner.effort = effort
-        if session_manager:
-            session_manager.agent_effort = effort
+        model = "auto" if model == "auto" else normalize_model_id(model)
+        if model != "auto" and not get_router().get(model):
+            return JSONResponse({"error": f"Modelo desconhecido: {model}"}, status_code=400)
+        app_state["agent_model"] = model
+        if agent_runner:
+            agent_runner.model = model
+    if effort in ("low", "medium", "high", "max"):
+        app_state["agent_effort"] = effort
+        if agent_runner:
+            agent_runner.effort = effort
+    if voice_model:
+        if voice_model not in {v["id"] for v in VOICE_MODELS}:
+            return JSONResponse({"error": f"Modelo de voz desconhecido: {voice_model}"}, status_code=400)
+        app_state["voice_model"] = voice_model
+    save_state()
 
-    return {"model": agent_runner.model, "effort": agent_runner.effort}
+    return {"model": app_state["agent_model"], "effort": app_state["agent_effort"], "voice_model": app_state["voice_model"]}
 
 
 @app.get("/api/agent-config")
 async def get_agent_config():
-    if not agent_runner:
-        return {"model": "google/gemini-2.0-flash", "effort": "high"}
-    return {"model": agent_runner.model, "effort": agent_runner.effort}
+    return {"model": app_state.get("agent_model", "auto"), "effort": app_state.get("agent_effort", "high"),
+            "voice_model": app_state.get("voice_model")}
 
 
 @app.get("/api/checkpoints")
@@ -303,6 +358,7 @@ async def get_dashboard():
         "model": agent_runner.model if agent_runner else None,
         "effort": agent_runner.effort if agent_runner else None,
         "provider": agent_runner._get_provider(agent_runner.model) if agent_runner else None,
+        "last": get_router().last_choice,
     }
 
     providers = {
@@ -461,6 +517,8 @@ def main():
 
     if args.project:
         set_project(os.path.abspath(args.project))
+    else:
+        open_default_project()
 
     print(f"VoiceClaw starting on http://localhost:{args.port}")
     

@@ -14,6 +14,7 @@ class FunctionRouter:
 
         if name == "code_task":
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=args.get("instruction", ""),
                 mode="edit",
             ):
@@ -22,6 +23,7 @@ class FunctionRouter:
         elif name == "investigate_and_advise":
             question = args.get("question", "")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=(
                     f"The developer is asking: {question}. "
                     "Read the relevant code and give your grounded "
@@ -35,6 +37,7 @@ class FunctionRouter:
         elif name == "read_file":
             path = args.get("path", "")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=f"Read the file at {path} and provide a concise summary of its contents.",
                 mode="edit",
                 allowed_tools="Read",
@@ -44,6 +47,7 @@ class FunctionRouter:
         elif name == "run_command":
             command = args.get("command", "")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=f"Run this shell command and report the output: {command}",
                 mode="edit",
             ):
@@ -51,6 +55,7 @@ class FunctionRouter:
 
         elif name == "get_status":
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=(
                     "What files have been modified in this session? "
                     "Show a brief summary of recent changes."
@@ -63,6 +68,7 @@ class FunctionRouter:
         elif name == "plan_task":
             instruction = args.get("instruction", "")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=(
                     f"Analyze and create a detailed plan for: {instruction}. "
                     "Do NOT make any changes. Only read code, analyze, and produce a step-by-step plan."
@@ -75,6 +81,7 @@ class FunctionRouter:
         elif name == "debug_issue":
             description = args.get("description", "")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=(
                     f"Debug this issue: {description}. "
                     "Investigate the codebase, identify the root cause, "
@@ -89,6 +96,7 @@ class FunctionRouter:
         elif name == "review_changes":
             scope = args.get("scope", "recent")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=(
                     f"Review {scope} code changes. Run git diff or git log as needed. "
                     "Check for bugs, security issues, code quality problems, and suggest improvements. "
@@ -102,6 +110,7 @@ class FunctionRouter:
         elif name == "computer_control":
             # Pass all arguments to the agent
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=f"Execute desktop action with these parameters: {args}. You can use 'launch_app' for reliable application opening and 'manage_background_task' for status monitoring every few seconds.",
                 mode="edit",
                 allowed_tools="computer_control,Bash,Read,Glob,launch_app,manage_background_task",
@@ -111,6 +120,7 @@ class FunctionRouter:
         elif name == "launch_app":
             app_name = args.get("name", "")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=f"Abra o aplicativo ou documento: {app_name}",
                 mode="edit",
                 allowed_tools="launch_app",
@@ -120,6 +130,7 @@ class FunctionRouter:
         elif name == "open_url":
             url = args.get("url", "")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=f"Abra a URL no navegador: {url}",
                 mode="edit",
                 allowed_tools="launch_app",
@@ -129,6 +140,7 @@ class FunctionRouter:
         elif name == "open_app":
             app_name = args.get("name", "")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=f"Inicie o aplicativo: {app_name}",
                 mode="edit",
                 allowed_tools="launch_app",
@@ -139,6 +151,7 @@ class FunctionRouter:
             action = args.get("action", "")
             instr = args.get("instruction", "")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=f"Gerencie tarefa em background: {action} - {instr}",
                 mode="edit",
                 allowed_tools="manage_background_task",
@@ -149,6 +162,7 @@ class FunctionRouter:
             path = args.get("path", "")
             content = args.get("content", "")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=f"Write content to file at {path}: {content[:100]}...",
                 mode="edit",
                 allowed_tools="write",
@@ -158,6 +172,7 @@ class FunctionRouter:
         elif name == "create_directory":
             path = args.get("path", "")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=f"Create directory at {path}",
                 mode="edit",
                 allowed_tools="create_directory",
@@ -167,6 +182,7 @@ class FunctionRouter:
         elif name == "list_directory":
             path = args.get("path", ".")
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=f"List directory at {path}",
                 mode="edit",
                 allowed_tools="ls",
@@ -178,6 +194,7 @@ class FunctionRouter:
             content = args.get("content", "")
             # We use a direct instruction to the agent to ensure it's logged
             async for event in self.agent.run(
+                task_kind=name,
                 instruction=f"Gravar o seguinte conteúdo no arquivo '{path}':\n\n{content}",
                 mode="edit",
                 allowed_tools="write"

@@ -29,3 +29,9 @@ Thumbs.db
 .voicecode/
 *.pdf
 package-lock.json
+
+# Preferências locais do Jarvis
+jarvis_state.json
+
+# Vault Obsidian local (memória pessoal do Jarvis)
+jarvis/

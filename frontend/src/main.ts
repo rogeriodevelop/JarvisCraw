@@ -2,9 +2,9 @@
  * VoiceClaw — Entry point. Glues together all modules.
  *
  * Flow:
- *   1. Check if project is selected (GET /api/project)
- *   2. If not → show project picker
- *   3. If yes → show voice screen, init audio/gemini/backend
+ *   1. O servidor já abre um projeto (último usado ou a pasta padrão)
+ *   2. A tela de voz aparece direto; trocar de projeto é uma janela no cabeçalho
+ *   3. Modelos, voz e microfone ficam no painel de Ajustes
  */
 
 import "./style.css";
@@ -17,7 +17,7 @@ import { BackendConnection } from "./backend-connection";
 import { UI } from "./ui";
 import { WaveRenderer } from "./wave-renderer";
 import { NvidiaApiService } from "./services/nvidia-api";
-import type { BackendMessage, AgentToolUseEvent, AgentTextEvent, AgentThinkingEvent, AgentClearCanvasEvent } from "./types";
+import type { BackendMessage, AgentToolUseEvent, AgentTextEvent, AgentThinkingEvent, AgentClearCanvasEvent, AgentRouteEvent, AgentModelEvent } from "./types";
 
 const ui = new UI();
 
@@ -28,6 +28,8 @@ let narration: NarrationConnection | null = null;
 let backend: BackendConnection | null = null;
 let nvidiaApi: NvidiaApiService | null = null;
 let isConnected = false;
+let voiceReady = false;
+let currentProject: string | null = null;
 let pendingImages: { mimeType: string; data: string }[] = [];
 
 // Avenger Protocol Audio state
@@ -108,15 +110,36 @@ async function openProject(path: string): Promise<boolean> {
     });
     const data = await res.json();
     if (data.error) {
-      ui.setPickerError(data.error);
+      ui.setPickerError(data.error === "Directory not found" ? "Pasta não encontrada" : data.error);
       return false;
     }
+    const changed = currentProject !== null && currentProject !== data.path;
+    currentProject = data.path;
     ui.showVoiceScreen(data.path);
-    await initVoiceUI();
+    if (!voiceReady) {
+      await initVoiceUI();
+    } else if (changed) {
+      // A voz continua conectada; só o agente passa a trabalhar na nova pasta
+      ui.addStatus(`Projeto alterado para ${data.path}`);
+      gemini?.sendText(`[Sistema] O projeto de trabalho agora é: ${data.path}`);
+    }
     return true;
   } catch {
-    ui.setPickerError("Failed to connect to backend");
+    ui.setPickerError("Falha ao falar com o servidor");
     return false;
+  }
+}
+
+async function openProjectPicker(): Promise<void> {
+  try {
+    const res = await fetch("/api/projects/recent");
+    const data = await res.json();
+    ui.setRecentProjects(data.recent || [], data.current, data.default);
+    ui.showProjectPicker();
+    await browseDir(data.current || "~");
+  } catch {
+    ui.showProjectPicker();
+    await browseDir("~");
   }
 }
 
@@ -171,9 +194,15 @@ async function initVoiceUI(): Promise<void> {
     (window as any).backend = backend;
     switch (msg.type) {
       case "agent_event": {
-        const e = msg as AgentToolUseEvent | AgentTextEvent | AgentThinkingEvent | AgentClearCanvasEvent;
-        if (e.subtype === "tool_use") {
-          const detail = (e.input.file_path as string) || (e.input.command as string) || (e.input.pattern as string) || "";
+        const e = msg as AgentToolUseEvent | AgentTextEvent | AgentThinkingEvent | AgentClearCanvasEvent | AgentRouteEvent | AgentModelEvent;
+        if (e.subtype === "route") {
+          log("ROUTER", `task=${e.task} tier=${e.tier} candidates=${e.candidates.join(",")}`);
+          ui.addRoute(e.task, e.tier, e.candidates);
+        } else if (e.subtype === "model") {
+          log("ROUTER", `model=${e.model}`);
+          ui.addModelSwitch(e.label, e.model, e.tier);
+        } else if (e.subtype === "tool_use") {
+          const detail = (e.input.path as string) || (e.input.file_path as string) || (e.input.command as string) || (e.input.pattern as string) || "";
           log("AGENT", `tool=${e.tool} ${detail ? "target=" + detail : ""}`);
           ui.addActivityEvent(e);
           agentActivityLog.push(`[${e.tool}] ${detail}`);
@@ -181,7 +210,7 @@ async function initVoiceUI(): Promise<void> {
           
           // Incrementar contadores do Dashboard
           ui.incrementTasksCount();
-          if (["Glob", "Grep", "recall_memory", "search_memory"].includes(e.tool)) {
+          if (["find_files", "search_code", "recall_memory", "search_memory"].includes(e.tool)) {
             ui.incrementSearchesCount();
           }
         } else if (e.subtype === "thinking") {
@@ -237,7 +266,7 @@ async function initVoiceUI(): Promise<void> {
         ui.addGeminiToolResult(msg.name, msg.result, msg.is_error || false);
         ui.addActivityDone(msg.is_error || false);
         ui.setAgentWorking(false);
-        ui.addStatus("Agent finished");
+        ui.addStatus("Agente terminou");
         break;
       }
 
@@ -245,12 +274,12 @@ async function initVoiceUI(): Promise<void> {
         log("AGENT", `status running=${msg.agent_running} session=${msg.session_id}`);
         ui.setAgentWorking(msg.agent_running);
         if (msg.agent_running) {
-          ui.addStatus(`Agent working (session: ${msg.session_id?.slice(0, 8) || "new"})`);
+                    ui.addStatus(`Agente trabalhando (sessão ${msg.session_id?.slice(0, 8) || "nova"})`);
         }
         break;
     }
   }, (connected) => {
-    ui.addStatus(connected ? "Backend connected" : "Backend disconnected");
+        ui.addStatus(connected ? "Servidor conectado" : "Servidor desconectado");
   });
   backend.connect();
 
@@ -278,45 +307,69 @@ async function initVoiceUI(): Promise<void> {
   // Auto-connect Gemini
   await connectGemini();
 
-  // Populate model selector
+  voiceReady = true;
+}
+
+// ── Modelos (agente e voz) ───────────────────────────────────
+
+async function setupModelSettings(): Promise<void> {
   const modelSelect = document.getElementById("model-select") as HTMLSelectElement;
+  const effortSelect = document.getElementById("effort-select") as HTMLSelectElement;
+  const voiceSelect = document.getElementById("voice-model-select") as HTMLSelectElement;
+
+  const modeLabel = () =>
+    modelSelect.value === "auto" ? "Automático" : (modelSelect.selectedOptions[0]?.textContent || modelSelect.value);
+
   try {
     const res = await fetch("/api/models");
     const data = await res.json();
-    if (data.models) {
-      modelSelect.innerHTML = "";
-      data.models.forEach((m: any) => {
-        const opt = document.createElement("option");
-        opt.value = m.id;
-        opt.textContent = m.name;
-        modelSelect.appendChild(opt);
-      });
-      // Set initial value from current config
-      const configRes = await fetch("/api/config");
-      const config = await configRes.json();
-      if (config.model) {
-        modelSelect.value = config.model;
-      }
+
+    modelSelect.innerHTML = "";
+    const auto = data.agent.find((m: any) => m.id === "auto");
+    if (auto) modelSelect.appendChild(new Option(auto.label, auto.id));
+    for (const tier of ["rapido", "padrao", "forte"]) {
+      const models = data.agent.filter((m: any) => m.tier === tier);
+      if (!models.length) continue;
+      const group = document.createElement("optgroup");
+      group.label = `Fixar — ${data.tiers[tier]}`;
+      for (const m of models) group.appendChild(new Option(`${m.label} (${m.provider})`, m.id));
+      modelSelect.appendChild(group);
     }
+    voiceSelect.innerHTML = "";
+    for (const v of data.voice) voiceSelect.appendChild(new Option(v.label, v.id));
+
+    modelSelect.value = data.current.agent_model || "auto";
+    effortSelect.value = data.current.agent_effort || "high";
+    if (data.current.voice_model) voiceSelect.value = data.current.voice_model;
+    ui.setRouteMode(modeLabel());
   } catch (err) {
     log("UI", `Failed to load models: ${err}`);
   }
 
+  const saveConfig = async (body: Record<string, string>) => {
+    const res = await fetch("/api/agent-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.error) ui.addStatus(`Ajuste recusado: ${data.error}`);
+    return data;
+  };
+
   modelSelect.addEventListener("change", async () => {
-    const model = modelSelect.value;
-    log("UI", `Switching model to ${model}`);
-    try {
-      await fetch("/api/agent-config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model }),
-      });
-      // Reconnect to apply new model
-      log("UI", "Reconnecting Gemini to apply new model...");
-      await connectGemini();
-    } catch (err) {
-      log("UI", `Failed to update model: ${err}`);
-    }
+    await saveConfig({ model: modelSelect.value });
+    ui.setRouteMode(modeLabel());
+    ui.addStatus(`Modelo do agente: ${modeLabel()}`);
+  });
+  effortSelect.addEventListener("change", async () => {
+    await saveConfig({ effort: effortSelect.value });
+    ui.addStatus(`Esforço do agente: ${effortSelect.selectedOptions[0]?.textContent}`);
+  });
+  voiceSelect.addEventListener("change", async () => {
+    await saveConfig({ voice_model: voiceSelect.value });
+    ui.addStatus(`Modelo de voz: ${voiceSelect.selectedOptions[0]?.textContent} — reconectando…`);
+    if (voiceReady) await connectGemini();
   });
 }
 
@@ -359,7 +412,7 @@ async function connectGemini(): Promise<void> {
     },
     onInterrupted: () => {
       ui.endTranscript();
-      ui.addStatus("User interrupted Gemini");
+      ui.addStatus("Você interrompeu a fala");
     },
     onThinking: (text) => {
       ui.addGeminiThinking(text);
@@ -525,7 +578,7 @@ async function connectGemini(): Promise<void> {
           fetch("/api/agent-config")
             .then((r) => r.json())
             .then((data) => {
-              const msg = `Current config: model=${data.model}, effort=${data.effort}. Supported models: Gemini 2.0 Flash, Llama 3.3, DeepSeek, Kimi, etc. Available efforts: low, medium, high, max.`;
+              const msg = `Current config: model=${data.model}, effort=${data.effort}. Use model 'auto' for per-task routing, or pin one of: google/gemini-flash-lite-latest, google/gemini-flash-latest, google/gemini-pro-latest, nvidia/z-ai/glm-5.3, nvidia/nvidia/nemotron-3-super-120b-a12b, nvidia/moonshotai/kimi-k3. Efforts: low, medium, high, max.`;
               gemini!.sendFunctionResponse(id, name, msg);
               ui.addGeminiToolResult(name, msg, false);
             })
@@ -542,7 +595,9 @@ async function connectGemini(): Promise<void> {
           })
             .then((r) => r.json())
             .then((data) => {
-              const msg = `Agent config updated: model=${data.model}, effort=${data.effort}`;
+              const msg = data.error ? `Failed: ${data.error}` : `Agent config updated: model=${data.model}, effort=${data.effort}`;
+              const sel = document.getElementById("model-select") as HTMLSelectElement | null;
+              if (sel && data.model) { sel.value = data.model; ui.setRouteMode(data.model === "auto" ? "Automático" : (sel.selectedOptions[0]?.textContent || data.model)); }
               gemini!.sendFunctionResponse(id, name, msg);
               ui.addGeminiToolResult(name, msg, false);
             })
@@ -582,12 +637,12 @@ async function connectGemini(): Promise<void> {
     onConnected: () => {
       ui.setConnected(true);
       isConnected = true;
-      ui.addStatus("Jarvis connected");
+      ui.addStatus("Jarvis conectado");
     },
     onDisconnected: () => {
       ui.setConnected(false);
       isConnected = false;
-      ui.addStatus("Gemini disconnected");
+      ui.addStatus("Voz desconectada");
     },
     onStateChange: (state) => {
       ui.setGeminiState(state);
@@ -643,9 +698,9 @@ function setupStaticUI(): void {
     const mode = modeSelect.value as "push-to-talk" | "toggle" | "always-on";
     audioManager?.setMode(mode);
     const hints: Record<string, string> = {
-      "push-to-talk": "Hold Space to Talk",
-      "toggle": "Tap Space to Talk",
-      "always-on": "Listening...",
+      "push-to-talk": "Segure Espaço para falar",
+      "toggle": "Toque em Espaço para falar",
+      "always-on": "Ouvindo…",
     };
     const hintEl = document.getElementById("mic-hint");
     if (hintEl) hintEl.textContent = hints[mode];
@@ -719,7 +774,7 @@ function setupStaticUI(): void {
       body: JSON.stringify({ gemini_handle: null }),
     }).catch(() => {});
     ui.clearAll();
-    ui.addStatus("Context cleared — starting new session");
+    ui.addStatus("Contexto limpo — nova sessão");
     await connectGemini();
   });
 }
@@ -736,6 +791,7 @@ function teardownVoiceUI(): void {
   backend = null;
   audioManager = null;
   isConnected = false;
+  voiceReady = false;
 }
 
 // ── Main Init ────────────────────────────────────────────────
@@ -746,7 +802,7 @@ async function init() {
 
   setupStaticUI();
 
-  // Wire up picker events
+  // Janela de projeto (aberta pelo nome do projeto no cabeçalho)
   ui.onOpenProject((path) => openProject(path));
   ui.onBrowseNative(async () => {
     try {
@@ -759,30 +815,27 @@ async function init() {
       // dialog cancelled or failed
     }
   });
-  ui.onChangeProject(() => {
-    teardownVoiceUI();
-    ui.showProjectPicker();
-    browseDir("~");
-  });
+  ui.onChangeProject(() => openProjectPicker());
   ui.onBrowseDir((path) => browseDir(path));
   ui.onSelectDir((path) => openProject(path));
   ui.onRecentClick((path) => openProject(path));
 
-  // Check if a project is already set (e.g. via --project CLI arg)
+  await setupModelSettings();
+
+  // O servidor sempre abre um projeto ao iniciar; a janela só aparece se algo falhar
   try {
     const res = await fetch("/api/project");
     const data = await res.json();
 
     if (data.active && data.path) {
+      currentProject = data.path;
       ui.showVoiceScreen(data.path);
       await initVoiceUI();
     } else {
-      ui.showProjectPicker();
-      browseDir("~");
+      await openProjectPicker();
     }
   } catch {
-    ui.showProjectPicker();
-    browseDir("~");
+    await openProjectPicker();
   }
 
   console.log("APP", "VoiceClaw v2.3 — StableTurn (VAD manual fix)");

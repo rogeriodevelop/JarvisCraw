@@ -19,7 +19,7 @@ class SessionManager:
                 return json.loads(self.state_file.read_text())
             except (json.JSONDecodeError, OSError):
                 pass
-        return {"agent_session_id": None, "agent_model": "google/gemini-2.0-flash", "agent_effort": "high"}
+        return {"agent_session_id": None, "agent_model": "google/gemini-flash-latest", "agent_effort": "high"}
 
     def save(self):
         self.state_file.write_text(json.dumps(self.state, indent=2))

@@ -21,6 +21,7 @@ type EventCategory =
   | "agent-thinking"
   | "agent-text"
   | "file-change"
+  | "route"
   | "status";
 
 // Map visual categories to their filter group
@@ -36,8 +37,24 @@ const FILTER_MAP: Record<EventCategory, string> = {
   "agent-thinking": "agent-thinking",
   "agent-text": "agent-tool",
   "file-change": "file-change",
+  "route": "route",
   "status": "status",
 };
+
+const TIER_LABELS: Record<string, string> = { rapido: "Rápido", padrao: "Padrão", forte: "Forte" };
+
+export interface RoutingRow {
+  id: string;
+  label: string;
+  provider: string;
+  tier: string;
+  state: "ok" | "wait" | "off" | "idle";
+  wait: number;
+  latency: number | null;
+  ok: number;
+  fail: number;
+  error: string | null;
+}
 
 export class UI {
   private transcriptEl: HTMLElement;
@@ -48,9 +65,10 @@ export class UI {
   private micHint: HTMLElement;
   private connectBtn: HTMLElement;
 
-  // Screens
+  // Screens / modais
   private pickerScreen: HTMLElement;
   private voiceScreen: HTMLElement;
+  private settingsModal: HTMLElement;
 
   // Picker elements
   private projectPathInput: HTMLInputElement;
@@ -94,6 +112,7 @@ export class UI {
 
     this.pickerScreen = document.getElementById("project-picker")!;
     this.voiceScreen = document.getElementById("voice-screen")!;
+    this.settingsModal = document.getElementById("settings-modal")!;
     this.projectPathInput = document.getElementById("project-path") as HTMLInputElement;
     this.browserList = document.getElementById("browser-list")!;
     this.browserHeader = document.getElementById("browser-header")!;
@@ -119,13 +138,47 @@ export class UI {
     this.initSkillsModal();
     this.initDashboard();
     this.initFilters();
+    this.initModals();
 
     // Iniciar loop periódico leve em background para sincronizar subagentes e status na tela principal
     window.setInterval(() => {
-      if (this.voiceScreen.style.display !== "none") {
+      if (document.visibilityState === "visible") {
         this.updateDashboard();
+        if (this.settingsModal.style.display !== "none" || this.dashboardOverlay.style.display !== "none") {
+          this.updateRouting();
+        }
       }
     }, 3000);
+  }
+
+  private initModals(): void {
+    const closeOnBackdrop = (el: HTMLElement, close: () => void) =>
+      el.addEventListener("click", (e) => { if (e.target === el) close(); });
+
+    document.getElementById("close-project-btn")?.addEventListener("click", () => this.closeProjectPicker());
+    closeOnBackdrop(this.pickerScreen, () => this.closeProjectPicker());
+
+    const openSettings = () => this.openSettings();
+    document.getElementById("settings-btn")?.addEventListener("click", openSettings);
+    document.getElementById("route-pill")?.addEventListener("click", openSettings);
+    document.getElementById("close-settings-btn")?.addEventListener("click", () => this.closeSettings());
+    closeOnBackdrop(this.settingsModal, () => this.closeSettings());
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      this.closeProjectPicker();
+      this.closeSettings();
+      this.closeDashboard();
+    });
+  }
+
+  openSettings(): void {
+    this.settingsModal.style.display = "flex";
+    this.updateRouting();
+  }
+
+  closeSettings(): void {
+    this.settingsModal.style.display = "none";
   }
 
   private initSkillsModal(): void {
@@ -183,20 +236,22 @@ export class UI {
 
   showProjectPicker(): void {
     this.pickerScreen.style.display = "flex";
-    this.voiceScreen.style.display = "none";
-    this.renderRecentProjects();
     this.projectPathInput.focus();
+    this.projectPathInput.select();
   }
 
-  showVoiceScreen(projectPath: string): void {
+  closeProjectPicker(): void {
     this.pickerScreen.style.display = "none";
+  }
+
+  /** Atualiza o cabeçalho com o projeto ativo e fecha a janela de projetos. */
+  showVoiceScreen(projectPath: string): void {
+    this.closeProjectPicker();
     this.voiceScreen.style.display = "flex";
 
-    const name = projectPath.split(/[/\\]/).pop() || projectPath;
+    const name = projectPath.split(/[/\\]/).filter(Boolean).pop() || projectPath;
     this.projectNameEl.textContent = name;
-    this.projectNameEl.title = projectPath;
-
-    this.addRecentProject(projectPath);
+    (this.projectNameEl.parentElement as HTMLElement).title = `Projeto: ${projectPath}\nClique para trocar`;
   }
 
   onOpenProject(handler: (path: string) => void): void {
@@ -250,83 +305,79 @@ export class UI {
   renderFolderBrowser(current: string, parent: string, dirs: { name: string; path: string }[]): void {
     this.projectPathInput.value = current;
 
-    this.browserHeader.innerHTML = `<button class="browser-up" data-path="${escapeAttr(parent)}">&#8593; Up</button>
-      <span class="browser-current">${escapeHtml(current)}</span>`;
+    this.browserHeader.innerHTML = `<button class="browser-up" data-path="${escapeAttr(parent)}">&#8593; Subir</button>
+      <span class="browser-current">${escapeHtml(current)}</span>
+      <span class="browser-hint">clique para entrar · duplo clique para abrir</span>`;
 
-    this.browserList.innerHTML = dirs
-      .map(
-        (d) =>
-          `<div class="browser-dir" data-path="${escapeAttr(d.path)}">&#128193; ${escapeHtml(d.name)}</div>`
-      )
-      .join("");
+    this.browserList.innerHTML = dirs.length
+      ? dirs
+          .map((d) => `<div class="browser-dir" data-path="${escapeAttr(d.path)}">&#128193; ${escapeHtml(d.name)}</div>`)
+          .join("")
+      : `<div class="browser-empty">Nenhuma subpasta</div>`;
   }
 
   setPickerError(msg: string): void {
     this.projectPathInput.classList.add("input-error");
+    const previous = this.projectPathInput.value;
+    this.projectPathInput.value = "";
     this.projectPathInput.placeholder = msg;
     setTimeout(() => {
       this.projectPathInput.classList.remove("input-error");
-      this.projectPathInput.placeholder = "/path/to/your/project";
-    }, 2000);
+      this.projectPathInput.placeholder = "C:\\caminho\\do\\projeto";
+      if (!this.projectPathInput.value) this.projectPathInput.value = previous;
+    }, 2500);
   }
 
-  private renderRecentProjects(): void {
-    const recent = this.getRecentProjects();
-    if (recent.length === 0) {
+  /** Lista de projetos recentes (vem do servidor). */
+  setRecentProjects(recent: string[], current: string | null, defaultPath: string): void {
+    const paths = [...recent];
+    if (defaultPath && !paths.includes(defaultPath)) paths.push(defaultPath);
+    if (paths.length === 0) {
       this.recentProjectsEl.innerHTML = "";
       return;
     }
     this.recentProjectsEl.innerHTML =
-      `<h3>Recent Projects</h3>` +
-      recent
+      `<h3>Recentes</h3>` +
+      paths
         .map((p) => {
-          const name = p.split(/[/\\]/).pop() || p;
-          return `<div class="recent-entry" data-path="${escapeAttr(p)}">
-            <span class="recent-name">${escapeHtml(name)}</span>
+          const name = p.split(/[/\\]/).filter(Boolean).pop() || p;
+          const badges = [
+            p === current ? `<span class="recent-badge current">atual</span>` : "",
+            p === defaultPath ? `<span class="recent-badge">padrão</span>` : "",
+          ].join("");
+          return `<div class="recent-entry${p === current ? " is-current" : ""}" data-path="${escapeAttr(p)}">
+            <span class="recent-name">📁 ${escapeHtml(name)} ${badges}</span>
             <span class="recent-path">${escapeHtml(p)}</span>
           </div>`;
         })
         .join("");
   }
 
-  private addRecentProject(path: string): void {
-    const recent = this.getRecentProjects().filter((p) => p !== path);
-    recent.unshift(path);
-    localStorage.setItem("voicecode_recent", JSON.stringify(recent.slice(0, 10)));
-  }
-
-  private getRecentProjects(): string[] {
-    try {
-      return JSON.parse(localStorage.getItem("voicecode_recent") || "[]");
-    } catch {
-      return [];
-    }
-  }
-
   // ── Status ──────────────────────────────────────────────────
 
   setConnected(connected: boolean): void {
     this.statusDot.className = `status-dot ${connected ? "connected" : "disconnected"}`;
-    this.statusText.textContent = connected ? "Connected" : "Disconnected";
-    this.connectBtn.textContent = connected ? "Disconnect" : "Connect";
+    this.statusText.textContent = connected ? "Conectado" : "Desconectado";
+    this.connectBtn.textContent = connected ? "Desconectar" : "Conectar";
+    this.connectBtn.classList.toggle("is-on", connected);
   }
 
   setAgentWorking(working: boolean): void {
     if (working) {
-      this.statusText.textContent = "Agent working...";
+      this.statusText.textContent = "Agente trabalhando…";
       this.statusDot.className = "status-dot recording";
     } else {
-      this.statusText.textContent = "Connected";
+      this.statusText.textContent = "Conectado";
       this.statusDot.className = "status-dot connected";
     }
   }
 
   setGeminiState(state: "idle" | "thinking" | "speaking" | "listening"): void {
     const labels: Record<string, string> = {
-      idle: "Ready",
-      thinking: "Thinking...",
-      speaking: "Speaking...",
-      listening: "Listening...",
+      idle: "Pronto",
+      thinking: "Pensando…",
+      speaking: "Falando…",
+      listening: "Ouvindo…",
     };
     const dotClass: Record<string, string> = {
       idle: "connected",
@@ -438,7 +489,7 @@ export class UI {
   }
 
   private timeStamp(): string {
-    return new Date().toLocaleTimeString("en-US", {
+    return new Date().toLocaleTimeString("pt-BR", {
       hour12: false,
       hour: "2-digit",
       minute: "2-digit",
@@ -448,17 +499,17 @@ export class UI {
 
   // Gemini events
   addGeminiThinking(text: string): void {
-    this.appendTimeline("gemini-thinking", "Thinking", text);
+    this.appendTimeline("gemini-thinking", "Voz", text);
   }
 
   addGeminiToolCall(name: string, args: Record<string, unknown>): void {
     const argsPreview = JSON.stringify(args).slice(0, 120);
-    this.appendTimeline("gemini-tool-call", "Tool Call", `${name}(${argsPreview})`);
+    this.appendTimeline("gemini-tool-call", "Chamada", `${name}(${argsPreview})`);
   }
 
   addGeminiToolResult(name: string, result: string, isError: boolean): void {
     const cat: EventCategory = isError ? "gemini-tool-error" : "gemini-tool-result";
-    const tag = isError ? "Error" : "Result";
+    const tag = isError ? "Erro" : "Resultado";
     this.appendTimeline(cat, tag, result, true);
   }
 
@@ -496,55 +547,50 @@ export class UI {
   }
 
   addGeminiSummarize(functionName: string): void {
-    this.appendTimeline("gemini-summarize", "Summarizing", `Relaying Agent's ${functionName} response`);
+    this.appendTimeline("gemini-summarize", "Resumo", `Repassando a resposta de ${functionName}`);
   }
 
   // Agent events
   addActivityEvent(event: AgentToolUseEvent): void {
-    const icon = toolIcon(event.tool);
-    let detail = "";
+    const tool = normalizeTool(event.tool);
+    const input = event.input || {};
+    const path = (input.path as string) || (input.file_path as string) || "";
+    let detail: string;
 
-    if (event.tool === "Read" || event.tool === "Edit" || event.tool === "Write") {
-      detail = (event.input.file_path as string) || event.tool;
-    } else if (event.tool === "Bash") {
-      detail = ((event.input.command as string) || "").slice(0, 80);
-    } else if (event.tool === "Glob" || event.tool === "Grep") {
-      detail = (event.input.pattern as string) || "search";
+    if (tool === "Read" || tool === "Edit" || tool === "Write") {
+      detail = path || event.tool;
+    } else if (tool === "Bash") {
+      detail = ((input.command as string) || "").slice(0, 120);
+    } else if (tool === "Glob" || tool === "Grep") {
+      detail = `${(input.pattern as string) || "busca"}${input.file_glob ? `  [${input.file_glob}]` : ""}`;
+    } else if (tool === "LS") {
+      detail = (input.directory as string) || ".";
     } else {
-      detail = event.tool;
+      detail = Object.keys(input).length ? JSON.stringify(input).slice(0, 120) : "";
     }
 
-    this.appendTimeline("agent-tool", `${icon} ${event.tool}`, detail);
+    this.appendTimeline("agent-tool", `${toolIcon(tool)} ${TOOL_LABELS[tool] || event.tool}`, detail);
 
-    // Also add inline diffs for Edit/Write
-    if (event.tool === "Edit") {
-      this.addDiff(
-        (event.input.file_path as string) || "unknown",
-        (event.input.old_string as string) || "",
-        (event.input.new_string as string) || ""
-      );
-    } else if (event.tool === "Write") {
-      this.addDiff(
-        (event.input.file_path as string) || "unknown",
-        "",
-        (event.input.content as string) || ""
-      );
+    if (tool === "Edit") {
+      this.addDiff(path || "arquivo", (input.old_string as string) || "", (input.new_string as string) || "");
+    } else if (tool === "Write") {
+      this.addDiff(path || "arquivo", "", (input.content as string) || "");
     }
   }
 
   addActivityDone(isError: boolean): void {
     const cat: EventCategory = isError ? "agent-error" : "agent-done";
-    const tag = isError ? "Error" : "Done";
-    this.appendTimeline(cat, tag, isError ? "Task failed" : "Task completed");
+    const tag = isError ? "Erro" : "Concluído";
+    this.appendTimeline(cat, tag, isError ? "A tarefa falhou" : "Tarefa concluída");
   }
 
   addAgentThinking(text: string): void {
-    this.appendTimeline("agent-thinking", "Agent Thinking", text, true);
+    this.appendTimeline("agent-thinking", "Agente", text, true);
   }
 
   addAgentText(text: string): void {
     const result = this.extractCodeAndClean(text);
-    this.appendTimeline("agent-text", "Agent", result.cleanHtml, true);
+    this.appendTimeline("agent-text", "Agente", result.cleanHtml, true);
     
     if (result.hasCode || result.isAnalysis) {
       this.updateLiveCanvas(result.canvasHtml, true); // Append content
@@ -696,6 +742,49 @@ export class UI {
     this.appendTimeline("status", "Status", message);
   }
 
+  // ── Roteamento de modelos ─────────────────────────────────
+
+  /** Modo configurado ("Automático" ou o modelo fixado). */
+  setRouteMode(label: string): void {
+    const el = document.getElementById("route-mode");
+    if (el) el.textContent = label;
+  }
+
+  /** Tarefa roteada: mostra o nível escolhido. */
+  addRoute(task: string, tier: string, candidates: string[]): void {
+    const tierLabel = TIER_LABELS[tier] || tier;
+    this.setRoutePill(`nível ${tierLabel.toLowerCase()}…`, "busy");
+    this.appendTimeline("route", "Rota", `${task} → nível ${tierLabel} · candidatos: ${candidates.map(shortModel).join(", ")}`);
+  }
+
+  /** Modelo que respondeu (ou assumiu como reserva). */
+  addModelSwitch(label: string, modelId: string, tier: string): void {
+    const tierLabel = TIER_LABELS[tier] || tier;
+    this.setRoutePill(`${label} · ${tierLabel}`, "ok");
+    this.appendTimeline("route", "Modelo", `${label} (${modelId})`);
+  }
+
+  private setRoutePill(text: string, state: "ok" | "busy" | "idle" | "warn"): void {
+    const model = document.getElementById("route-model");
+    const dot = document.getElementById("route-dot");
+    if (model) model.textContent = text;
+    if (dot) dot.className = `route-dot ${state}`;
+  }
+
+  async updateRouting(): Promise<void> {
+    try {
+      const res = await fetch("/api/routing");
+      const data = await res.json();
+      const html = renderRoutingTable(data.models as RoutingRow[]);
+      for (const id of ["settings-routing", "dashboard-routing"]) {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = html;
+      }
+    } catch (err) {
+      console.error("Routing update failed:", err);
+    }
+  }
+
   // File changes (inline diffs)
   addDiff(filePath: string, oldStr: string, newStr: string): void {
     const entry = document.createElement("div");
@@ -772,6 +861,7 @@ export class UI {
   openDashboard(): void {
     this.dashboardOverlay.style.display = "flex";
     this.updateDashboard();
+    this.updateRouting();
     // Auto-refresh every 5 seconds while open
     this.dashboardRefreshInterval = window.setInterval(() => this.updateDashboard(), 5000);
   }
@@ -817,9 +907,12 @@ export class UI {
         codeStatus.textContent = data.agent?.model ? "ONLINE" : "STANDBY";
         codeStatus.className = `dash-status ${data.agent?.model ? "online" : ""}`;
       }
-      this.setDashValue("active-model", data.agent?.model ?? "—");
-      this.setDashValue("active-provider", data.agent?.provider?.toUpperCase() ?? "—");
-      this.setDashValue("active-effort", data.agent?.effort?.toUpperCase() ?? "—");
+      const mode = data.agent?.model === "auto" ? "Automático" : (data.agent?.model ?? "—");
+      this.setDashValue("active-model", mode);
+      const last = data.agent?.last;
+      this.setDashValue("active-provider", last ? `${shortModel(last.model)} (${last.latency}s)` : "—");
+      const efforts: Record<string, string> = { low: "Baixo", medium: "Médio", high: "Alto", max: "Máximo" };
+      this.setDashValue("active-effort", efforts[data.agent?.effort] ?? "—");
       this.setDashValue("tasks-count", String(this._tasksCount));
 
       // Providers
@@ -831,14 +924,10 @@ export class UI {
           ).join("");
       }
 
-      // Search panel
-      this.setDashValue("searches-count", String(this._searchesCount));
-      this.setDashValue("obsidian-search-status", data.obsidian?.connected ? "Ativo" : "Inativo");
-
-      const searchStatus = document.getElementById("search-agent-status");
-      if (searchStatus) {
-        searchStatus.textContent = "ONLINE";
-        searchStatus.className = "dash-status online";
+      const routeStatus = document.getElementById("search-agent-status");
+      if (routeStatus) {
+        routeStatus.textContent = data.agent?.model === "auto" ? "AUTO" : "FIXO";
+        routeStatus.className = "dash-status online";
       }
 
       // Subagents Status Update
@@ -866,7 +955,7 @@ export class UI {
           mainProgDot.className = `subagent-dot ${progActive ? "active" : "standby"}`;
           const label = mainProgBadge.querySelector(".subagent-label");
           if (label) {
-            label.textContent = `💻 PROG: ${data.subagents.programmer}`;
+            label.textContent = progActive ? "💻 PROG · ATIVO" : "💻 PROG";
           }
         }
 
@@ -878,7 +967,7 @@ export class UI {
           mainDesDot.className = `subagent-dot ${desActive ? "active" : "standby"}`;
           const label = mainDesBadge.querySelector(".subagent-label");
           if (label) {
-            label.textContent = `🎨 DESIGN: ${data.subagents.designer}`;
+            label.textContent = desActive ? "🎨 DESIGN · ATIVO" : "🎨 DESIGN";
           }
         }
       }
@@ -974,6 +1063,33 @@ function escapeAttr(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
+/** Converte os nomes de ferramenta do agente para as categorias exibidas. */
+function normalizeTool(tool: string): string {
+  const map: Record<string, string> = {
+    read_file: "Read",
+    edit_file: "Edit",
+    write_file: "Write",
+    run_bash_command: "Bash",
+    run_command: "Bash",
+    find_files: "Glob",
+    search_code: "Grep",
+    list_directory: "LS",
+    create_directory: "Mkdir",
+  };
+  return map[tool] || tool;
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  Read: "Ler",
+  Edit: "Editar",
+  Write: "Criar",
+  Bash: "Terminal",
+  Glob: "Arquivos",
+  Grep: "Buscar",
+  LS: "Pasta",
+  Mkdir: "Nova pasta",
+};
+
 function toolIcon(tool: string): string {
   const icons: Record<string, string> = {
     Read: "\u{1F4D6}",
@@ -983,8 +1099,41 @@ function toolIcon(tool: string): string {
     Glob: "\u{1F50D}",
     Grep: "\u{1F50D}",
     LS: "\u{1F4C1}",
+    Mkdir: "\u{1F4C1}",
   };
   return icons[tool] || "\u2699\uFE0F";
+}
+
+function shortModel(id: string): string {
+  return (id || "").replace(/^(google|nvidia|openrouter)\//, "").replace(/^(nvidia|z-ai|moonshotai|deepseek-ai)\//, "");
+}
+
+function renderRoutingTable(rows: RoutingRow[]): string {
+  if (!rows?.length) return `<div class="routing-empty">Nenhum provedor configurado.</div>`;
+  const stateLabel: Record<string, string> = { ok: "ok", wait: "em espera", off: "indisponível", idle: "não usado" };
+  const order = ["rapido", "padrao", "forte"];
+  return order
+    .map((tier) => {
+      const group = rows.filter((r) => r.tier === tier);
+      if (!group.length) return "";
+      return `<div class="routing-tier"><div class="routing-tier-title">${TIER_LABELS[tier]}</div>` +
+        group
+          .map((r) => {
+            const extra = r.state === "wait" ? ` ${r.wait}s` : "";
+            const lat = r.latency != null ? `${r.latency}s` : "—";
+            const title = r.error ? ` title="${escapeAttr(r.error)}"` : "";
+            return `<div class="routing-row state-${r.state}"${title}>
+              <span class="routing-dot"></span>
+              <span class="routing-name">${escapeHtml(r.label)}</span>
+              <span class="routing-provider">${escapeHtml(r.provider)}</span>
+              <span class="routing-lat">${lat}</span>
+              <span class="routing-state">${stateLabel[r.state] || r.state}${extra}</span>
+            </div>`;
+          })
+          .join("") +
+        `</div>`;
+    })
+    .join("");
 }
 
 /** Quick check if text contains markdown syntax worth rendering. */

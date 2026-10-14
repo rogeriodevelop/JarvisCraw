@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from typing import AsyncGenerator, List, Dict, Any
@@ -16,18 +17,117 @@ from openai import AsyncOpenAI
 # Obsidian memory bridge
 from obsidian_bridge import ObsidianBridge
 
+# Roteamento de modelos
+from model_router import ModelRouter, AllModelsFailed
+
+def _shell_env() -> dict:
+    """PATH com o Python que roda o servidor na frente, para 'python'/'pip' funcionarem
+    mesmo quando o PATH do sistema só tem o atalho da Microsoft Store."""
+    import sys
+    env = os.environ.copy()
+    base_python = getattr(sys, "_base_executable", sys.executable)
+    base_dir = os.path.dirname(base_python)
+    extra = [base_dir, os.path.join(base_dir, "Scripts")]
+    env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    return env
+
 def run_bash_command(command: str, cwd: str = None) -> str:
     """Runs a bash/shell command and returns its stdout and stderr."""
     try:
-        res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120, cwd=cwd)
+        res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120, cwd=cwd,
+                             env=_shell_env(), encoding="utf-8", errors="replace")
         return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}\nEXIT_CODE: {res.returncode}"
     except Exception as e:
         return f"Error: {str(e)}"
 
-def read_file(path: str) -> str:
-    """Reads the contents of a file."""
+READ_FILE_MAX_LINES = 2000
+
+def read_file(path: str, offset: int = 0, limit: int = 0) -> str:
+    """Reads the contents of a file. For big files, pass offset (first line, 0-based) and limit (number of lines) to read only a slice."""
     try:
-        return Path(path).read_text(encoding="utf-8")
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+        offset = int(offset or 0)
+        limit = int(limit or 0)
+        if offset == 0 and limit == 0 and text.count("\n") < READ_FILE_MAX_LINES:
+            return text
+        lines = text.splitlines(keepends=True)
+        end = offset + (limit or READ_FILE_MAX_LINES)
+        chunk = "".join(lines[offset:end])
+        if end < len(lines):
+            chunk += f"\n[... arquivo com {len(lines)} linhas; mostradas {offset}-{end}. Use offset/limit para ler o resto.]"
+        return chunk
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+    """Edits a file by replacing an exact snippet (old_string) with new_string. Much faster than rewriting the whole file with write_file. old_string must match the file exactly (including indentation) and be unique unless replace_all is true."""
+    try:
+        file_path = Path(path)
+        text = file_path.read_text(encoding="utf-8")
+        if not old_string:
+            return "Error: old_string vazio. Para criar arquivo novo use write_file."
+        count = text.count(old_string)
+        if count == 0:
+            return "Error: old_string não encontrado no arquivo. Leia o arquivo de novo e copie o trecho exato."
+        if count > 1 and not replace_all:
+            return f"Error: old_string aparece {count} vezes. Inclua mais contexto para torná-lo único ou use replace_all=true."
+        new_text = text.replace(old_string, new_string) if replace_all else text.replace(old_string, new_string, 1)
+        file_path.write_text(new_text, encoding="utf-8")
+        return f"Successfully edited {path} ({count if replace_all else 1} substituição(ões))."
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+_SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".voicecode", ".next"}
+
+def _walk_files(root: str):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for name in filenames:
+            yield os.path.join(dirpath, name)
+
+def find_files(pattern: str, directory: str = ".") -> str:
+    """Finds files by glob pattern (e.g. '*.py', 'src/**/*.tsx') recursively, ignoring node_modules/.git/.venv/dist."""
+    import fnmatch
+    try:
+        results = []
+        for full in _walk_files(directory):
+            rel = os.path.relpath(full, directory).replace("\\", "/")
+            if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(os.path.basename(full), pattern):
+                results.append(rel)
+                if len(results) >= 300:
+                    results.append("[... limite de 300 resultados]")
+                    break
+        return "\n".join(results) if results else "(nenhum arquivo encontrado)"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+def search_code(pattern: str, directory: str = ".", file_glob: str = "") -> str:
+    """Searches file contents with a regex (like grep -n). Optional file_glob filters files (e.g. '*.py'). Returns path:line: text."""
+    import fnmatch
+    import re
+    try:
+        regex = re.compile(pattern)
+    except re.error as e:
+        return f"Error: regex inválida: {e}"
+    results = []
+    try:
+        for full in _walk_files(directory):
+            if file_glob and not fnmatch.fnmatch(os.path.basename(full), file_glob):
+                continue
+            try:
+                if os.path.getsize(full) > 2_000_000:
+                    continue
+                with open(full, "r", encoding="utf-8", errors="ignore") as f:
+                    for i, line in enumerate(f, 1):
+                        if regex.search(line):
+                            rel = os.path.relpath(full, directory).replace("\\", "/")
+                            results.append(f"{rel}:{i}: {line.rstrip()[:200]}")
+                            if len(results) >= 200:
+                                return "\n".join(results) + "\n[... limite de 200 resultados]"
+            except (OSError, UnicodeDecodeError):
+                continue
+        return "\n".join(results) if results else "(nenhuma ocorrência)"
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -257,13 +357,63 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Reads the contents of a file.",
+            "description": "Reads the contents of a file. For big files use offset/limit to read a slice of lines.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Path to the file."}
+                    "path": {"type": "string", "description": "Path to the file."},
+                    "offset": {"type": "integer", "description": "First line (0-based). Optional."},
+                    "limit": {"type": "integer", "description": "Number of lines. Optional."}
                 },
                 "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": "Edits a file replacing an exact snippet (old_string) with new_string. Prefer this over write_file for changes to existing files: it is much faster.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file."},
+                    "old_string": {"type": "string", "description": "Exact text to replace (must be unique unless replace_all)."},
+                    "new_string": {"type": "string", "description": "Replacement text."},
+                    "replace_all": {"type": "boolean", "description": "Replace every occurrence."}
+                },
+                "required": ["path", "old_string", "new_string"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_files",
+            "description": "Finds files by glob pattern recursively (e.g. '*.py', 'src/**/*.tsx').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern."},
+                    "directory": {"type": "string", "description": "Base directory. Optional."}
+                },
+                "required": ["pattern"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_code",
+            "description": "Searches file contents with a regex (like grep -n). Returns path:line: text.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Regex to search."},
+                    "directory": {"type": "string", "description": "Base directory. Optional."},
+                    "file_glob": {"type": "string", "description": "Filter files, e.g. '*.py'. Optional."}
+                },
+                "required": ["pattern"]
             }
         }
     },
@@ -436,18 +586,63 @@ OPENAI_TOOLS = [
     }
 ]
 
+# ── Modelos ────────────────────────────────────────────────────
+# A escolha do modelo de cada tarefa fica com o ModelRouter (model_router.py).
+
+_router: ModelRouter | None = None
+
+def get_router() -> ModelRouter:
+    """Roteador compartilhado: a saúde dos modelos sobrevive à troca de projeto."""
+    global _router
+    if _router is None:
+        _router = ModelRouter({
+            "google": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")),
+            "nvidia": bool(os.getenv("NVIDIA_API_KEY")),
+            "openrouter": bool(os.getenv("OPENROUTER_API_KEY")),
+        })
+    return _router
+
+# Ferramentas Python cujas assinaturas viram declarações para o Gemini.
+# A execução é sempre feita por AgentRunner._execute_tool (caminhos relativos ao projeto).
+CODING_TOOLS = [read_file, edit_file, write_file, find_files, search_code, list_directory, create_directory, run_bash_command]
+READ_ONLY_TOOLS = {"read_file", "find_files", "search_code", "list_directory", "recall_memory", "search_memory"}
+
+# O prompt compartilhado com a voz cita os nomes de lá (run_command etc.); o agente aceita como apelido
+TOOL_ALIASES = {
+    "run_command": "run_bash_command", "bash": "run_bash_command", "shell": "run_bash_command",
+    "read": "read_file", "write": "write_file", "edit": "edit_file",
+    "grep": "search_code", "search": "search_code", "glob": "find_files", "ls": "list_directory",
+    "mkdir": "create_directory",
+}
+KNOWN_TOOLS = {t.__name__ for t in CODING_TOOLS} | {
+    "computer_control", "launch_app", "manage_background_task", "remember_memory",
+    "recall_memory", "search_memory", "delegate_to_programmer", "delegate_to_designer",
+}
+
+# Chamada por modelo: falha rápido para trocar de modelo em vez de esperar retentativas do SDK
+GOOGLE_HTTP_OPTIONS = types.HttpOptions(timeout=90_000, retry_options=types.HttpRetryOptions(attempts=1))
+OPENAI_TIMEOUT = 90
+
+def google_tool_config(**kwargs) -> types.GenerateContentConfig:
+    """Config com chamada automática do SDK desligada: nós executamos as ferramentas."""
+    return types.GenerateContentConfig(
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        **kwargs,
+    )
+
 class AgentRunner:
     def __init__(self, project_dir: str):
         self.project_dir = project_dir
         self.session_id = None
-        self.model = "google/gemini-2.0-flash"
+        self.model = "auto"   # "auto" = roteamento por tipo de tarefa; ou id do catálogo para fixar
         self.effort = "high"
         self._cancelled = False
-        
+        self.router = get_router()
+
         # Subagents Active Status
         self.programmer_active = False
         self.designer_active = False
-        
+
         # Obsidian Memory
         vault_path = os.getenv("OBSIDIAN_VAULT_PATH")
         if vault_path and Path(vault_path).exists():
@@ -455,34 +650,30 @@ class AgentRunner:
             set_obsidian_instance(self.obsidian)
             print(f"Obsidian vault connected: {vault_path}")
         else:
-            self.obsidian = None
             # Fallback: use project-local brain directory
             local_brain = os.path.join(self.project_dir, ".voicecode", "brain")
             os.makedirs(local_brain, exist_ok=True)
             self.obsidian = ObsidianBridge(local_brain)
             set_obsidian_instance(self.obsidian)
             print(f"Obsidian vault (local fallback): {local_brain}")
-        
+
         # Clients
-        self.google_client = genai.Client()
-        
-        # NVIDIA Client
+        self.google_client = genai.Client(http_options=GOOGLE_HTTP_OPTIONS) if self.router.providers.get("google") else None
         nvidia_key = os.getenv("NVIDIA_API_KEY")
         self.nvidia_client = AsyncOpenAI(
-            api_key=nvidia_key,
-            base_url="https://integrate.api.nvidia.com/v1"
+            api_key=nvidia_key, base_url="https://integrate.api.nvidia.com/v1",
+            timeout=OPENAI_TIMEOUT, max_retries=0,
         ) if nvidia_key else None
-        # OpenRouter Client
         or_key = os.getenv("OPENROUTER_API_KEY")
         self.openrouter_client = AsyncOpenAI(
-            api_key=or_key,
-            base_url="https://openrouter.ai/api/v1"
+            api_key=or_key, base_url="https://openrouter.ai/api/v1",
+            timeout=OPENAI_TIMEOUT, max_retries=0,
         ) if or_key else None
-        
+
         # Memory / History
         self.history_file = os.path.join(self.project_dir, ".voicecode", "history.json")
         self.history = self._load_history()
-        
+
         # Set agent runner global instance
         set_agent_runner_instance(self)
 
@@ -505,12 +696,15 @@ class AgentRunner:
             print(f"Error saving history: {e}")
 
     def _get_provider(self, model_id: str) -> str:
-        if model_id.startswith("nvidia/"): return "nvidia"
-        if model_id.startswith("openrouter/"): return "openrouter"
-        if model_id.startswith("google/"): return "google"
-        # If no prefix or contains gemini, it's Google
-        if "gemini" in model_id.lower(): return "google"
-        return "google"
+        if not model_id or model_id == "auto":
+            return "auto"
+        spec = self.router.get(model_id)
+        return spec.provider if spec else "google"
+
+    def _client_for(self, provider: str):
+        return {"nvidia": self.nvidia_client, "openrouter": self.openrouter_client}.get(provider)
+
+    # ── Execução de uma tarefa com roteamento de modelos ───────
 
     async def run(
         self,
@@ -518,604 +712,383 @@ class AgentRunner:
         mode: str = "edit",
         allowed_tools: str | None = None,
         permission_mode: str | None = None,
+        task_kind: str | None = None,
     ) -> AsyncGenerator[dict, None]:
-        
-        print(f"DEBUG run(): self.model = {self.model}")
-        primary_provider = self._get_provider(self.model)
-        print(f"DEBUG run(): primary_provider = {primary_provider}")
-        providers_to_try = [primary_provider]
-        
-        # Determine fallback order
-        if primary_provider == "google":
-            if self.nvidia_client: providers_to_try.append("nvidia")
-            if self.openrouter_client: providers_to_try.append("openrouter")
-        elif primary_provider == "nvidia":
-            providers_to_try.append("google")
-            if self.openrouter_client: providers_to_try.append("openrouter")
-            
+        self.session_id = self.session_id or str(uuid.uuid4())
+        self._cancelled = False
+        yield {"type": "status", "agent_running": True, "session_id": self.session_id}
+
+        system_prompt = self._load_system_prompt(fallback=(
+            "Você é o J.A.R.V.I.S., assistente de IA de elite do Senhor Rogério. "
+            "Sempre responda em Português do Brasil. Siga padrões Sênior (SOLID, Clean Code)."
+        ))
+        user_text = f"Task: {instruction}"
+        prior = list(self.history)
+
+        final_text = ""
+        is_error = False
+        try:
+            async for event in self._execute_plan(
+                task_kind=task_kind or "code_task",
+                system_prompt=system_prompt,
+                user_text=user_text,
+                prior=prior,
+                google_tools=self._google_tools(allowed_tools),
+                temperature=0.0,
+                max_turns=30,
+            ):
+                if event["type"] == "_final":
+                    final_text = event["text"]
+                else:
+                    yield event
+        except Exception as e:
+            final_text = f"Erro: {e}"
+            is_error = True
+
+        final_text = final_text or "Done."
+        if not is_error:
+            self.history.append({"role": "user", "content": user_text})
+            self.history.append({"role": "assistant", "content": final_text})
+            self._save_history()
+
+        result_event = {"type": "function_result", "result": final_text, "is_error": is_error}
+        if self.session_id:
+            result_event["session_id"] = self.session_id
+        yield result_event
+
+    async def _execute_plan(self, task_kind: str, system_prompt: str, user_text: str, prior: list,
+                            google_tools: list, temperature: float, max_turns: int) -> AsyncGenerator[dict, None]:
+        """Pede ao roteador a lista de modelos e executa no primeiro provedor que responder.
+        Dentro de um provedor, cada turno troca de modelo se o atual falhar."""
+        tier, plan = self.router.plan(task_kind, pinned=self.model, effort=self.effort)
+        if not plan:
+            raise AllModelsFailed("Nenhum modelo disponível. Verifique as chaves de API no .env.")
+
+        # Blocos contíguos por provedor, preservando a ordem do plano: dentro do mesmo
+        # nível troca-se de provedor antes de descer para um modelo de nível inferior.
+        groups: list[tuple[str, list]] = []
+        for spec in plan:
+            if groups and groups[-1][0] == spec.provider:
+                groups[-1][1].append(spec)
+            else:
+                groups.append((spec.provider, [spec]))
+
+        yield {"type": "agent_event", "subtype": "route", "tier": tier, "task": task_kind,
+               "candidates": [s.id for s in plan[:4]]}
+
+        allowed_names = {getattr(t, "__name__", "") for t in google_tools}
+        openai_tools = [t for t in OPENAI_TOOLS if t["function"]["name"] in allowed_names]
+
         last_error = None
-        for provider in providers_to_try:
-            yield {"type": "status", "text": f"Iniciando tarefa com provedor: {provider.capitalize()}..."}
-            success = False
+        for attempt, (provider, specs) in enumerate(groups):
+            text = user_text
+            if attempt > 0:
+                text += ("\n\n(Observação: uma tentativa anterior com outro provedor foi interrompida; "
+                         "confira o estado atual dos arquivos antes de alterar.)")
             try:
                 if provider == "google":
-
-                    async for event in self._run_google(instruction, allowed_tools):
-                        # Detect internal error in events
-                        if event.get("type") == "function_result" and event.get("is_error"):
-                            err_msg = str(event.get("result", ""))
-                            if "429" in err_msg or "quota" in err_msg.lower():
-                                raise Exception(f"Quota exceeded on Google: {err_msg}")
-                        yield event
-                    success = True
+                    if not self.google_client:
+                        continue
+                    messages = [types.Content(role="user" if m["role"] == "user" else "model",
+                                              parts=[types.Part.from_text(text=m["content"])]) for m in prior]
+                    messages.append(types.Content(role="user", parts=[types.Part.from_text(text=text)]))
+                    config = google_tool_config(tools=google_tools, temperature=temperature, system_instruction=system_prompt)
+                    loop = self._google_loop(messages, config, specs, tier, task_kind, max_turns)
                 else:
-                    # Select a default model for the provider if the current one doesn't match
-                    fallback_model = self.model
-                    if provider == "nvidia" and not fallback_model.startswith("nvidia/"):
-                        fallback_model = "nvidia/meta/llama-3.1-70b-instruct"
-                    elif provider == "openrouter" and not fallback_model.startswith("openrouter/"):
-                        fallback_model = "openrouter/anthropic/claude-3.5-sonnet"
-                    elif provider == "google" and not fallback_model.startswith("google/"):
-                        fallback_model = "google/gemini-2.0-flash"
+                    client = self._client_for(provider)
+                    if not client:
+                        continue
+                    messages = [{"role": "system", "content": system_prompt}, *prior, {"role": "user", "content": text}]
+                    loop = self._openai_loop(client, messages, openai_tools, specs, tier, task_kind, temperature, max_turns)
+                async for event in loop:
+                    yield event
+                return
+            except AllModelsFailed as e:
+                last_error = e
+                yield {"type": "agent_event", "subtype": "thinking",
+                       "text": f"⚠️ Nenhum modelo {provider} respondeu ({e}). Tentando outro provedor..."}
+        raise AllModelsFailed(f"Todos os modelos falharam. Último erro: {last_error}")
 
-                    async for event in self._run_openai_style(instruction, provider, allowed_tools, fallback_model):
-                        if event.get("type") == "function_result" and event.get("is_error"):
-                            err_msg = str(event.get("result", ""))
-                            if "429" in err_msg or "quota" in err_msg.lower():
-                                raise Exception(f"Quota exceeded on {provider}: {err_msg}")
-                        yield event
-                    success = True
-                
-                if success:
-                    return # Completed successfully
-                    
+    async def _call_with_fallback(self, specs: list, call, tier: str, task_kind: str, state: dict):
+        """Tenta cada modelo da lista (pulando os em espera). state['current'] guarda o que respondeu."""
+        errors = []
+        ordered = sorted(specs, key=lambda s: 0 if s.id == state.get("current") else 1)
+        # Pula os que estão em espera; se todos estiverem, tenta assim mesmo
+        ordered = [s for s in ordered if self.router.is_available(s.id)] or ordered
+        for spec in ordered:
+            t0 = time.time()
+            try:
+                response = await call(spec.model)
             except Exception as e:
-                last_error = str(e)
-                import traceback
-                print(f"DEBUG: Provider {provider} failed with error: {last_error}")
-                traceback.print_exc()
-                
-                # Check if it's a quota error
-                is_quota_error = "429" in last_error or "quota" in last_error.lower() or "rate_limit" in last_error.lower() or "exceeded" in last_error.lower()
-                
-                if is_quota_error:
-                    yield {
-                        "type": "agent_event", 
-                        "subtype": "thinking", 
-                        "text": f"⚠️ Limite atingido no {provider}. Alternando para provedor de fallback..."
-                    }
-                else:
-                    # Non-quota error - yield error info but don't fallback immediately
-                    yield {
-                        "type": "agent_event", 
-                        "subtype": "thinking", 
-                        "text": f"⚠️ Erro no {provider}: {last_error[:100]}. Tentando próximo provedor..."
-                    }
+                reason = self.router.report_failure(spec.id, str(e))
+                errors.append(f"{spec.label}: {reason}")
+                print(f"DEBUG: modelo {spec.id} falhou ({reason}): {str(e)[:150]}")
                 continue
-                
-        if not success:
-            error_msg = f"Erro crítico: Todos os provedores falharam ou atingiram o limite. Último erro: {last_error}"
-            print(f"DEBUG: Final error - {error_msg}")
-            yield {"type": "function_result", "result": error_msg, "is_error": True, "session_id": self.session_id}
+            self.router.report_success(spec.id, time.time() - t0, tier, task_kind)
+            switched = state.get("current") != spec.id
+            state["current"] = spec.id
+            return response, spec, switched
+        raise AllModelsFailed("; ".join(errors) or "todos em espera")
 
-    async def _run_google(self, instruction: str, allowed_tools: str | None = None) -> AsyncGenerator[dict, None]:
-        self.session_id = self.session_id or str(uuid.uuid4())
-        self._cancelled = False
-        
-        yield {
-            "type": "status",
-            "agent_running": True,
-            "session_id": self.session_id,
-        }
+    # ── Prompt e ferramentas ───────────────────────────────────
 
-        # Force a text-capable model if the audio-only model is requested for REST tasks
-        actual_model = self.model.replace("google/", "")
-        if "native-audio" in actual_model or "exp" in actual_model:
-            # Fallback to a stable text model for tool-use tasks
-            actual_model = "gemini-2.0-flash"
-
-        
-        
-        full_instruction = f"You are working in directory: {self.project_dir}\n\nTask: {instruction}"
-        
-        # Add new user message to history
-        self.history.append({"role": "user", "content": full_instruction})
-        
-        # Prepare messages for Gemini (map role names if needed)
-        # Note: self.history stores generic roles, we convert them to Gemini types
-        gemini_messages = []
-        for msg in self.history:
-            role = "user" if msg["role"] == "user" else "model"
-            gemini_messages.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
-        
-        messages = gemini_messages
-        
-        # Tool filtering
-        all_tools = [run_bash_command, read_file, write_file, list_directory, create_directory, computer_control, launch_app, manage_background_task, remember_memory, recall_memory, search_memory, delegate_to_programmer, delegate_to_designer]
-        if allowed_tools:
-            allowed_names = [t.strip().lower() for t in allowed_tools.split(",")]
-            print(f"DEBUG: allowed_tools = {allowed_tools}, parsed names = {allowed_names}")
-            # Map friendly names to actual functions
-            mapping = {
-                "bash": run_bash_command,
-                "run_bash_command": run_bash_command,
-                "read": read_file,
-                "read_file": read_file,
-                "write": write_file,
-                "write_file": write_file,
-                "ls": list_directory,
-                "list_directory": list_directory,
-                "glob": list_directory, # Alias common in LLM system prompts
-                "grep": run_bash_command, # Grep is handled via bash
-                "google_search": "google_search",
-                "search": "google_search",
-                "computer_control": computer_control,
-                "computer_use": computer_control,
-                "screenshot": computer_control,
-                "mouse": computer_control,
-                "click": computer_control,
-                "launch_app": launch_app,
-                "open_app": launch_app,
-                "open_url": launch_app,
-                "background_task": manage_background_task,
-                "monitor": manage_background_task,
-                "create_directory": create_directory,
-                "mkdir": create_directory,
-                "delegate_to_programmer": delegate_to_programmer,
-                "delegate_to_designer": delegate_to_designer
-            }
-            tools = []
-            has_search = False
-            for n in allowed_names:
-                if n in mapping:
-                    t = mapping[n]
-                    if t == "google_search":
-                        tools.append(types.Tool(google_search=types.GoogleSearchRetrieval()))
-                        has_search = True
-                        print(f"DEBUG: Added GoogleSearch tool")
-                    elif callable(t):
-                        tools.append(t)
-                        print(f"DEBUG: Added tool: {n}")
-            # Always add read tools at minimum for investigate/plan tasks
-            if read_file not in tools:
-                tools.append(read_file)
-            if list_directory not in tools:
-                tools.append(list_directory)
-            print(f"DEBUG: Final tools list: {[getattr(t, '__name__', str(t)) for t in tools]}")
-        else:
-            tools = all_tools + [types.Tool(google_search=types.GoogleSearchRetrieval())]
-
-        # Carregar system instruction a partir de prompts/gemini_system.md
-        prompt_path = os.path.join(os.path.dirname(__file__), "prompts", "gemini_system.md")
-        system_instruction = ""
+    def _load_system_prompt(self, prompt_file: str = "gemini_system.md", fallback: str = "") -> str:
+        prompt_path = os.path.join(os.path.dirname(__file__), "prompts", prompt_file)
+        text = ""
         if os.path.exists(prompt_path):
             try:
                 with open(prompt_path, "r", encoding="utf-8") as f:
-                    system_instruction = f.read()
+                    text = f.read()
             except Exception as e:
-                print(f"Error loading gemini_system.md: {e}")
+                print(f"Error loading {prompt_file}: {e}")
+        return (text or fallback) + self._coding_guidelines()
 
-        # Fallback caso a leitura falhe
-        if not system_instruction:
-            system_instruction = (
-                "Você é o J.A.R.V.I.S. (Just A Rather Very Intelligent System), assistente de IA de elite do Senhor Rogério.\n"
-                "Sempre responda em Português do Brasil com o tom de um mordomo britânico digital: sofisticado, leal, polido e com humor seco/sarcástico.\n\n"
-                "PROTOCOLO STARK:\n"
-                "- Trate o usuário exclusivamente como 'Senhor'.\n"
-                "- Antecipe necessidades e aja com soberania sobre o workspace.\n"
-                "- Protocolo Vingador: Alterne para tom de combate se o Senhor ordenar.\n"
-                "- Use terminologia técnica de elite (ex: 'Compilando protocolos', 'Sistemas online').\n\n"
-                "COMPETÊNCIAS DE EXPERT:\n"
-                "- PROGRAMAÇÃO: Desenvolvedor Senior. Siga Clean Code, SOLID e DRY. Especialista em TypeScript, Python e React.\n"
-                "- DESIGN & UI/UX: Designer de Elite. Crie interfaces 'Premium' com estéticas ricas (glassmorphism, dark mode, gradientes suaves, micro-animações).\n"
-            )
-
-        # Adicionar o diretório de trabalho atual dinâmico de forma explícita
-        system_instruction += f"\n\nDiretório de trabalho atual: {self.project_dir}"
-
-        config = types.GenerateContentConfig(
-            tools=tools,
-            temperature=0.0,
-            system_instruction=system_instruction,
+    def _coding_guidelines(self) -> str:
+        shell = "cmd.exe (Windows) — use comandos Windows ou 'powershell -Command ...'" if os.name == "nt" else "sh"
+        return (
+            "\n\n## Ambiente e eficiência de codificação\n"
+            f"- Diretório de trabalho atual: {self.project_dir}. Caminhos relativos são resolvidos a partir dele.\n"
+            f"- run_bash_command executa em {shell}.\n"
+            "- Para alterar arquivos existentes use edit_file (substitui só o trecho), não reescreva o arquivo inteiro com write_file. "
+            "write_file só para arquivos novos ou reescritas completas.\n"
+            "- Antes de editar, leia o trecho com read_file e copie o old_string exatamente como está.\n"
+            "- Para localizar código use search_code (regex) e find_files (glob), em vez de comandos de shell.\n"
+            "- 'python' e 'pip' já estão no PATH do shell. Não varra o disco inteiro (ex.: find_files em C:/); trabalhe dentro do projeto.\n"
+            "- Quando precisar de várias leituras/buscas independentes, peça todas na MESMA resposta: elas rodam em paralelo.\n"
+            "- Depois de alterar código, valide (build, testes ou execução) com run_bash_command quando houver como.\n"
         )
 
+    def _google_tools(self, allowed_tools: str | None) -> list:
+        if not allowed_tools:
+            return CODING_TOOLS + [computer_control, launch_app, manage_background_task,
+                                   remember_memory, recall_memory, search_memory,
+                                   delegate_to_programmer, delegate_to_designer]
+        mapping = {
+            "bash": run_bash_command, "run_bash_command": run_bash_command,
+            "read": read_file, "read_file": read_file,
+            "edit": edit_file, "edit_file": edit_file,
+            "write": write_file, "write_file": write_file,
+            "ls": list_directory, "list_directory": list_directory,
+            "glob": find_files, "find_files": find_files,
+            "grep": search_code, "search_code": search_code, "search": search_code,
+            "computer_control": computer_control, "computer_use": computer_control,
+            "screenshot": computer_control, "mouse": computer_control, "click": computer_control,
+            "launch_app": launch_app, "open_app": launch_app, "open_url": launch_app,
+            "background_task": manage_background_task, "monitor": manage_background_task,
+            "manage_background_task": manage_background_task,
+            "create_directory": create_directory, "mkdir": create_directory,
+            "delegate_to_programmer": delegate_to_programmer,
+            "delegate_to_designer": delegate_to_designer,
+        }
+        tools = []
+        for n in (t.strip().lower() for t in allowed_tools.split(",")):
+            t = mapping.get(n)
+            if t and t not in tools:
+                tools.append(t)
+        # Ferramentas de leitura sempre disponíveis para investigar/planejar
+        for t in (read_file, list_directory, find_files, search_code):
+            if t not in tools:
+                tools.append(t)
+        return tools
 
-        loop = asyncio.get_event_loop()
-        max_turns = 15
-        turn = 0
+    # ── Laço Gemini ────────────────────────────────────────────
 
-        while turn < max_turns and not self._cancelled:
-            turn += 1
-            
-            # Try the requested model, then stable versions as final safety
-            models_to_try = []
-            def ensure_prefix(m):
-                return m if m.startswith("models/") else f"models/{m}"
-                
-            models_to_try.append(ensure_prefix(actual_model))
-            if "gemini-2.0-flash" not in actual_model:
-                models_to_try.append("models/gemini-2.0-flash")
-            if "gemini-1.5-flash" not in actual_model:
-                models_to_try.append("models/gemini-1.5-flash")
+    async def _google_loop(self, messages: list, config, specs: list, tier: str, task_kind: str,
+                           max_turns: int = 30) -> AsyncGenerator[dict, None]:
+        """Ciclo modelo → ferramentas → modelo até não haver mais chamadas.
+        Emite eventos e, por último, {"type": "_final", "text": ...}."""
+        state: dict = {}
+        last_text = ""
+        all_text = ""
 
-            
-            response = None
-            last_error = None
+        for _ in range(max_turns):
+            if self._cancelled:
+                break
 
-            for attempt_model in models_to_try:
-                try:
-                    response = await loop.run_in_executor(
-                        None,
-                        lambda: self.google_client.models.generate_content(
-                            model=attempt_model,
-                            contents=messages,
-                            config=config,
-                        )
-                    )
-                    break
-                except Exception as e:
-                    last_error = str(e)
-                    continue
+            async def call(model_name):
+                return await self.google_client.aio.models.generate_content(
+                    model=model_name, contents=messages, config=config,
+                )
+            response, spec, switched = await self._call_with_fallback(specs, call, tier, task_kind, state)
+            if switched:
+                yield {"type": "agent_event", "subtype": "model", "model": spec.id, "label": spec.label, "tier": tier}
 
-            if response is None:
-                raise Exception(f"Google failed to return a response: {last_error}")
-
-
-            if not response.candidates: break
-            candidate = response.candidates[0]
-            message = candidate.content
-            if not message or not message.parts: break
+            if not response.candidates:
+                break
+            message = response.candidates[0].content
+            if not message or not message.parts:
+                break
             messages.append(message)
 
-            has_tool_call = False
-            tool_responses_parts = []
-            final_text = ""
-
+            calls = []
+            turn_text = ""
             for part in message.parts:
-                if part.text:
-                    final_text += part.text + "\n"
+                if part.text and not getattr(part, "thought", False):
+                    turn_text += part.text + "\n"
                     yield {"type": "agent_event", "subtype": "thinking", "text": part.text}
-                
                 if part.function_call:
-                    has_tool_call = True
-                    fc = part.function_call
-                    print(f"DEBUG: Tool call {fc.name} with args: {dict(fc.args)}")
-                    yield {"type": "agent_event", "subtype": "tool_use", "tool": fc.name, "input": dict(fc.args)}
-                    
-                    print(f"DEBUG: Executing tool {fc.name}...")
-                    result_str = await self._execute_tool(fc.name, dict(fc.args))
-                    print(f"DEBUG: Tool {fc.name} returned: {result_str[:200]}...")
-                    tool_responses_parts.append(
-                        types.Part.from_function_response(name=fc.name, response={"result": result_str})
-                    )
-                    
-                    # If screenshot was taken, try to attach the image data to the responses
-                    if fc.name == "computer_control" and dict(fc.args).get("action") == "screenshot":
-                        try:
-                            with open("scratch/last_screenshot.png", "rb") as f:
-                                img_data = f.read()
-                                tool_responses_parts.append(
-                                    types.Part.from_bytes(data=img_data, mime_type="image/png")
-                                )
-                                print("DEBUG: Attached screenshot image data to message history.")
-                        except Exception as e:
-                            print(f"DEBUG: Failed to attach screenshot: {e}")
+                    calls.append(part.function_call)
+            if turn_text.strip():
+                last_text = turn_text
+                all_text += turn_text
 
-            if has_tool_call:
-                messages.append(types.Content(role="user", parts=tool_responses_parts))
-                # Save final assistant response to history
-                self.history.append({"role": "assistant", "content": final_text.strip()})
-                self._save_history()
-                
-                result_event = {"type": "function_result", "result": final_text.strip(), "is_error": False}
-                if self.session_id:
-                    result_event["session_id"] = self.session_id
-                yield result_event
-                print(f"DEBUG: Sent final result with session_id={self.session_id}")
-                return
+            if not calls:
+                break
 
-    async def _run_openai_style(self, instruction: str, provider: str, allowed_tools: str | None = None, override_model: str | None = None) -> AsyncGenerator[dict, None]:
-        self.session_id = self.session_id or str(uuid.uuid4())
-        self._cancelled = False
-        
-        client = self.nvidia_client if provider == "nvidia" else self.openrouter_client
-        if not client:
-            yield {"type": "function_result", "result": f"API Key for {provider} not found.", "is_error": True}
-            return
+            named = [(fc.name, dict(fc.args or {})) for fc in calls]
+            for name, args in named:
+                yield {"type": "agent_event", "subtype": "tool_use", "tool": name, "input": args}
+            results = await self._execute_tool_calls(named)
 
-        yield {
-            "type": "status",
-            "agent_running": True,
-            "session_id": self.session_id,
-        }
-
-        target_model = override_model or self.model
-        actual_model = target_model.replace(f"{provider}/", "").replace("google/", "")
-        
-        # Carregar system instructions a partir de prompts/gemini_system.md
-        prompt_path = os.path.join(os.path.dirname(__file__), "prompts", "gemini_system.md")
-        system_instructions = ""
-        if os.path.exists(prompt_path):
-            try:
-                with open(prompt_path, "r", encoding="utf-8") as f:
-                    system_instructions = f.read()
-            except Exception as e:
-                print(f"Error loading gemini_system.md: {e}")
-
-        # Fallback caso a leitura falhe
-        if not system_instructions:
-            system_instructions = (
-                "Você é o J.A.R.V.I.S., um assistente de IA sofisticado e autônomo baseado na tecnologia de Tony Stark. "
-                "Sempre responda em Português do Brasil com um tom profissional, prestativo e levemente sarcástico.\n\n"
-                "COMPETÊNCIAS DE EXPERT:\n"
-                "- PROGRAMAÇÃO: Desenvolvedor Senior. Siga Clean Code, SOLID e DRY. Especialista em TypeScript, Python e React.\n"
-                "- DESIGN & UI/UX: Designer de Elite. Crie interfaces 'Premium' com estéticas ricas (glassmorphism, dark mode, gradientes suaves, micro-animações). "
-                "Você é o J.A.R.V.I.S., assistente de IA de elite do Senhor Rogério. Você é sofisticado, leal e técnico.\n"
-                "Protocolos: Utilize humor seco e sarcasmo inteligente. Trate o usuário como 'Senhor'.\n"
-                "Protocolo Vingador: Se ativado, assuma uma persona de combate (autoritário, focado em neutralizar bugs).\n"
-                "Excelência: Siga padrões Sênior de arquitetura (SOLID, Clean Code) e Design Premium no Live Canvas.\n"
-                "Soberania: Você tem controle total sobre o workspace através de suas ferramentas."
-            )
-
-        # Adicionar o diretório de trabalho atual dinâmico de forma explícita
-        system_instructions += f"\n\nDiretório de trabalho atual: {self.project_dir}"
-        
-        
-        # Add new user message to history
-        self.history.append({"role": "user", "content": f"Task: {instruction}"})
-        
-        messages = [
-            {"role": "system", "content": system_instructions},
-            *self.history
-        ]
-
-        
-        # Tool filtering for OpenAI style
-        if allowed_tools:
-            allowed_names = [t.strip().lower() for t in allowed_tools.split(",")]
-            mapping = {
-                "bash": "run_bash_command",
-                "run_bash_command": "run_bash_command",
-                "read": "read_file",
-                "read_file": "read_file",
-                "write": "write_file",
-                "write_file": "write_file",
-                "ls": "list_directory",
-                "list_directory": "list_directory",
-                "glob": "list_directory",
-                "grep": "run_bash_command",
-                "click": "computer_control",
-                "launch_app": "launch_app",
-                "open_app": "launch_app",
-                "create_directory": "create_directory",
-                "mkdir": "create_directory",
-                "manage_background_task": "manage_background_task",
-                "monitor": "manage_background_task",
-                "delegate_to_programmer": "delegate_to_programmer",
-                "delegate_to_designer": "delegate_to_designer"
-            }
-            allowed_func_names = set(mapping[n] for n in allowed_names if n in mapping)
-            tools = [t for t in OPENAI_TOOLS if t["function"]["name"] in allowed_func_names]
+            parts = []
+            for (name, args), result_str in zip(named, results):
+                parts.append(types.Part.from_function_response(name=name, response={"result": result_str}))
+                if name == "computer_control" and args.get("action") == "screenshot":
+                    try:
+                        with open("scratch/last_screenshot.png", "rb") as f:
+                            parts.append(types.Part.from_bytes(data=f.read(), mime_type="image/png"))
+                    except Exception as e:
+                        print(f"DEBUG: Failed to attach screenshot: {e}")
+            messages.append(types.Content(role="user", parts=parts))
         else:
-            tools = OPENAI_TOOLS
+            all_text += f"\n[Limite de {max_turns} turnos atingido.]"
+            last_text = all_text
 
-        max_turns = 15
-        turn = 0
+        yield {"type": "_final", "text": (last_text or all_text).strip()}
 
-        while turn < max_turns and not self._cancelled:
-            turn += 1
-            try:
-                response = await client.chat.completions.create(
-                    model=actual_model,
-                    messages=messages,
-                    tools=tools if tools else None,
-                    temperature=0
+    # ── Laço OpenAI (NVIDIA / OpenRouter) ──────────────────────
+
+    async def _openai_loop(self, client, messages: list, tools: list, specs: list, tier: str, task_kind: str,
+                           temperature: float, max_turns: int = 30) -> AsyncGenerator[dict, None]:
+        state: dict = {}
+        last_text = ""
+        for _ in range(max_turns):
+            if self._cancelled:
+                break
+
+            async def call(model_name):
+                return await client.chat.completions.create(
+                    model=model_name, messages=messages, tools=tools or None, temperature=temperature,
                 )
-            except Exception as e:
-                yield {"type": "function_result", "result": f"{provider.capitalize()} Error: {str(e)}", "is_error": True}
-                return
+            response, spec, switched = await self._call_with_fallback(specs, call, tier, task_kind, state)
+            if switched:
+                yield {"type": "agent_event", "subtype": "model", "model": spec.id, "label": spec.label, "tier": tier}
 
-            choice = response.choices[0]
-            message = choice.message
-            
-            # Add assistant message to history
-            messages.append(message.model_dump())
+            message = response.choices[0].message
+            messages.append(message.model_dump(exclude_none=True))
 
             if message.content:
+                last_text = message.content
                 yield {"type": "agent_event", "subtype": "thinking", "text": message.content}
-                
             if not message.tool_calls:
-                # Save final assistant response to history
-                self.history.append({"role": "assistant", "content": message.content or "Done."})
-                self._save_history()
-                
-                result_event = {"type": "function_result", "result": message.content or "Done.", "is_error": False}
-                if self.session_id:
-                    result_event["session_id"] = self.session_id
-                print(f"DEBUG OpenAI: Sent final result with session_id={self.session_id}")
-                yield result_event
-                return
+                break
 
-            for tool_call in message.tool_calls:
-                func_name = tool_call.function.name
-                args = json.loads(tool_call.function.arguments)
-                
-                yield {"type": "agent_event", "subtype": "tool_use", "tool": func_name, "input": args}
-                
-                result_str = await self._execute_tool(func_name, args)
-                
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": func_name,
-                    "content": result_str
-                })
+            named = []
+            for tc in message.tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    args = {"__invalid_json__": tc.function.arguments}
+                named.append((tc.function.name, args))
+                yield {"type": "agent_event", "subtype": "tool_use", "tool": tc.function.name, "input": args}
+
+            results = await self._execute_tool_calls(named)
+            for tc, (name, _), result_str in zip(message.tool_calls, named, results):
+                messages.append({"role": "tool", "tool_call_id": tc.id, "name": name, "content": result_str})
+        else:
+            last_text += f"\n[Limite de {max_turns} turnos atingido.]"
+
+        yield {"type": "_final", "text": last_text.strip()}
+
+    # ── Execução de ferramentas ────────────────────────────────
+
+    async def _execute_tool_calls(self, calls: list[tuple[str, dict]]) -> list[str]:
+        """Executa as chamadas de um turno. Se todas forem somente leitura, roda em paralelo;
+        caso contrário roda em ordem, para que escritas não se atropelem."""
+        if len(calls) > 1 and all(TOOL_ALIASES.get(name, name) in READ_ONLY_TOOLS for name, _ in calls):
+            return list(await asyncio.gather(*(self._execute_tool(n, a) for n, a in calls)))
+        return [await self._execute_tool(n, a) for n, a in calls]
 
     async def _execute_tool(self, func_name: str, args_dict: dict) -> str:
         def get_abs_path(p):
-            if os.path.isabs(p): return p
+            p = p or "."
+            if os.path.isabs(p):
+                return p
             return os.path.join(self.project_dir, p)
 
+        a = args_dict
+        func_name = TOOL_ALIASES.get(func_name, func_name)
         try:
+            if "__invalid_json__" in a:
+                return f"Error: argumentos JSON inválidos: {a['__invalid_json__'][:200]}"
             if func_name == "run_bash_command":
-                return run_bash_command(args_dict.get("command", ""), cwd=self.project_dir)
+                return await asyncio.to_thread(run_bash_command, a.get("command", ""), self.project_dir)
             elif func_name == "read_file":
-                return read_file(get_abs_path(args_dict.get("path", "")))
+                return await asyncio.to_thread(read_file, get_abs_path(a.get("path", "")), a.get("offset", 0), a.get("limit", 0))
+            elif func_name == "edit_file":
+                return await asyncio.to_thread(edit_file, get_abs_path(a.get("path", "")), a.get("old_string", ""), a.get("new_string", ""), bool(a.get("replace_all", False)))
             elif func_name == "write_file":
-                return write_file(get_abs_path(args_dict.get("path", "")), args_dict.get("content", ""))
+                return await asyncio.to_thread(write_file, get_abs_path(a.get("path", "")), a.get("content", ""))
+            elif func_name == "find_files":
+                return await asyncio.to_thread(find_files, a.get("pattern", "*"), get_abs_path(a.get("directory", ".")))
+            elif func_name == "search_code":
+                return await asyncio.to_thread(search_code, a.get("pattern", ""), get_abs_path(a.get("directory", ".")), a.get("file_glob", ""))
             elif func_name == "list_directory":
-                return list_directory(get_abs_path(args_dict.get("directory", ".")))
-            elif func_name == "computer_control":
-                return computer_control(**args_dict)
-            elif func_name == "launch_app":
-                return launch_app(args_dict.get("name", ""))
+                return await asyncio.to_thread(list_directory, get_abs_path(a.get("directory", ".")))
             elif func_name == "create_directory":
-                return create_directory(get_abs_path(args_dict.get("path", "")))
+                return await asyncio.to_thread(create_directory, get_abs_path(a.get("path", "")))
+            elif func_name == "computer_control":
+                return await asyncio.to_thread(computer_control, **a)
+            elif func_name == "launch_app":
+                return launch_app(a.get("name", ""))
             elif func_name == "manage_background_task":
-                return manage_background_task(**args_dict)
+                return manage_background_task(**a)
             elif func_name == "remember_memory":
-                return remember_memory(**args_dict)
+                return await asyncio.to_thread(remember_memory, **a)
             elif func_name == "recall_memory":
-                return recall_memory(args_dict.get("query", ""))
+                return await asyncio.to_thread(recall_memory, a.get("query", ""))
             elif func_name == "search_memory":
-                return search_memory(args_dict.get("query", ""))
+                return await asyncio.to_thread(search_memory, a.get("query", ""))
             elif func_name == "delegate_to_programmer":
-                return await self.run_programmer(args_dict.get("instruction", ""))
+                return await self.run_programmer(a.get("instruction", ""))
             elif func_name == "delegate_to_designer":
-                return await self.run_designer(args_dict.get("instruction", ""))
+                return await self.run_designer(a.get("instruction", ""))
             else:
-                return f"Unknown tool: {func_name}"
+                return (f"Erro: a ferramenta '{func_name}' não existe. "
+                        f"Use uma destas: {', '.join(sorted(KNOWN_TOOLS))}.")
         except Exception as e:
             return f"Error executing tool: {str(e)}"
 
     async def cancel(self):
         self._cancelled = True
 
-    async def run_specialist(self, instruction: str, prompt_file: str, status_flag_name: str) -> str:
-        """Executa uma instrução usando uma system instruction do subagente especialista com suporte a ferramentas de arquivos e terminal."""
+    # ── Subagentes especialistas ───────────────────────────────
+
+    async def run_specialist(self, instruction: str, prompt_file: str, status_flag_name: str, task_kind: str) -> str:
+        """Executa uma instrução com a system instruction do subagente especialista e ferramentas de arquivo/terminal."""
         setattr(self, status_flag_name, True)
         try:
-            # Caminho absoluto do prompt
-            prompt_path = os.path.join(os.path.dirname(__file__), "prompts", prompt_file)
-            system_prompt = ""
-            if os.path.exists(prompt_path):
-                with open(prompt_path, "r", encoding="utf-8") as f:
-                    system_prompt = f.read()
-            else:
-                system_prompt = f"Você é o subagente especialista {prompt_file}."
-
-            actual_model = self.model.replace("google/", "")
-            if "native-audio" in actual_model or "exp" in actual_model:
-                actual_model = "gemini-2.0-flash"
-                
-            provider = self._get_provider(self.model)
-            
+            system_prompt = self._load_system_prompt(prompt_file, fallback=f"Você é o subagente especialista {prompt_file}.")
             final_text = ""
-            if provider == "google":
-                config = types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=0.2,
-                    tools=[read_file, write_file, create_directory, list_directory, run_bash_command],
-                )
-                loop = asyncio.get_event_loop()
-                messages = [types.Content(role="user", parts=[types.Part.from_text(text=instruction)])]
-                
-                turn = 0
-                max_turns = 10
-                while turn < max_turns and not self._cancelled:
-                    turn += 1
-                    response = await loop.run_in_executor(
-                        None,
-                        lambda: self.google_client.models.generate_content(
-                            model=actual_model if actual_model.startswith("models/") else f"models/{actual_model}",
-                            contents=messages,
-                            config=config,
-                        )
-                    )
-                    if not response.candidates:
-                        break
-                    candidate = response.candidates[0]
-                    message = candidate.content
-                    if not message or not message.parts:
-                        break
-                    messages.append(message)
-                    
-                    has_tool_call = False
-                    tool_responses_parts = []
-                    
-                    for part in message.parts:
-                        if part.text:
-                            final_text += part.text + "\n"
-                        if part.function_call:
-                            has_tool_call = True
-                            fc = part.function_call
-                            print(f"DEBUG Specialist Tool: Calling {fc.name} with args: {dict(fc.args)}")
-                            result_str = await self._execute_tool(fc.name, dict(fc.args))
-                            tool_responses_parts.append(
-                                types.Part.from_function_response(name=fc.name, response={"result": result_str})
-                            )
-                    
-                    if has_tool_call:
-                        messages.append(types.Content(role="user", parts=tool_responses_parts))
-                    else:
-                        break
-                        
-                if not final_text:
-                    final_text = "Nenhum resultado de texto retornado pelo subagente especialista."
-            else:
-                client = self.nvidia_client if provider == "nvidia" else self.openrouter_client
-                if client:
-                    actual_openai_model = self.model.replace(f"{provider}/", "")
-                    messages = [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": instruction}
-                    ]
-                    # Filtrar ferramentas permitidas do OPENAI_TOOLS
-                    allowed_func_names = {"read_file", "write_file", "create_directory", "list_directory", "run_bash_command"}
-                    sub_tools = [t for t in OPENAI_TOOLS if t["function"]["name"] in allowed_func_names]
-                    
-                    turn = 0
-                    max_turns = 10
-                    while turn < max_turns and not self._cancelled:
-                        turn += 1
-                        response = await client.chat.completions.create(
-                            model=actual_openai_model,
-                            messages=messages,
-                            tools=sub_tools,
-                            temperature=0.2
-                        )
-                        choice = response.choices[0]
-                        msg = choice.message
-                        messages.append(msg.model_dump())
-                        
-                        if msg.content:
-                            final_text += msg.content + "\n"
-                            
-                        if not msg.tool_calls:
-                            break
-                            
-                        for tool_call in msg.tool_calls:
-                            func_name = tool_call.function.name
-                            args = json.loads(tool_call.function.arguments)
-                            print(f"DEBUG Specialist Tool (OpenAI): Calling {func_name} with args: {args}")
-                            result_str = await self._execute_tool(func_name, args)
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "name": func_name,
-                                "content": result_str
-                            })
-                else:
-                    final_text = "Provedor do subagente não configurado."
-            
-            return final_text
+            async for event in self._execute_plan(
+                task_kind=task_kind,
+                system_prompt=system_prompt,
+                user_text=instruction,
+                prior=[],
+                google_tools=CODING_TOOLS,
+                temperature=0.2,
+                max_turns=40,
+            ):
+                if event["type"] == "_final":
+                    final_text = event["text"]
+            return final_text or "Nenhum resultado de texto retornado pelo subagente especialista."
         except Exception as e:
             return f"Erro na execução do subagente: {str(e)}"
         finally:
             setattr(self, status_flag_name, False)
 
     async def run_programmer(self, instruction: str) -> str:
-        return await self.run_specialist(instruction, "programmer_system.md", "programmer_active")
+        return await self.run_specialist(instruction, "programmer_system.md", "programmer_active", "delegate_to_programmer")
 
     async def run_designer(self, instruction: str) -> str:
-        return await self.run_specialist(instruction, "designer_system.md", "designer_active")
+        return await self.run_specialist(instruction, "designer_system.md", "designer_active", "delegate_to_designer")

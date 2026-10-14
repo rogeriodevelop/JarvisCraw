@@ -156,7 +156,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
       properties: {
         model: {
           type: "string",
-          description: "The model to use: e.g., 'gemini-2.0-flash', 'llama-3.3-70b', 'deepseek-v4', 'kimi-v1.5'",
+          description: "Model id for code tasks. Use 'auto' (recommended) to let the router pick per task, or a catalog id such as 'google/gemini-flash-latest', 'google/gemini-flash-lite-latest', 'nvidia/z-ai/glm-5.3', 'nvidia/moonshotai/kimi-k3'. Call with no parameters to list the available ids.",
         },
         effort: {
           type: "string",
@@ -399,7 +399,27 @@ export interface AgentClearCanvasEvent {
   subtype: "clear_canvas";
 }
 
+/** Backend → Browser: roteador escolheu o nível e os candidatos da tarefa */
+export interface AgentRouteEvent {
+  type: "agent_event";
+  subtype: "route";
+  tier: string;
+  task: string;
+  candidates: string[];
+}
+
+/** Backend → Browser: modelo que efetivamente respondeu (muda em caso de reserva) */
+export interface AgentModelEvent {
+  type: "agent_event";
+  subtype: "model";
+  model: string;
+  label: string;
+  tier: string;
+}
+
 export type BackendMessage =
+  | AgentRouteEvent
+  | AgentModelEvent
   | AgentToolUseEvent
   | AgentTextEvent
   | AgentThinkingEvent

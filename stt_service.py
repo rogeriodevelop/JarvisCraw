@@ -39,7 +39,7 @@ def transcribe_audio_sync(
     lang_name = _language_name(language_code)
 
     # Try different models for STT to avoid quota issues
-    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash"]
+    models_to_try = ["gemini-flash-lite-latest", "gemini-2.5-flash", "gemini-flash-latest"]
     last_err = None
     
     for model_id in models_to_try:
